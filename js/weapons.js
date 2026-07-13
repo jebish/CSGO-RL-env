@@ -18,9 +18,10 @@ const GUN_RECOIL_MOVING_DEG = 6;
 const GUN_RECOIL_SCOPED_DEG = 4; // between stationary and moving (placeholder)
 const GUN_RECOIL_STILL_DEG = 3;
 const FLAME_USE_PER_SEC = 30;
-/** Chest-front fire origin → toward camera crosshair aim point (classic TPS). */
-const FIRE_CHEST_Y = 0.95;
-const FIRE_CHEST_FORWARD = 0.42;
+/** Left-shoulder fire origin → toward camera crosshair aim point (classic TPS). */
+const FIRE_SHOULDER_Y = 1.18;
+const FIRE_SHOULDER_FORWARD = 0.28;
+const FIRE_SHOULDER_LEFT = 0.22;
 const FIRE_AIM_POINT_DIST = 80;
 const GUN_TRACER_LENGTH = 16;
 
@@ -309,7 +310,8 @@ export class WeaponSystem {
     this._muzzleWorld = new THREE.Vector3();
     this._aimEnd = new THREE.Vector3();
     this._aimPoint = new THREE.Vector3();
-    this._chestForward = new THREE.Vector3();
+    this._shoulderForward = new THREE.Vector3();
+    this._shoulderLeft = new THREE.Vector3();
     this._traceDir = new THREE.Vector3();
     this._onWheel = this._onWheel.bind(this);
     this._onDown = this._onDown.bind(this);
@@ -427,34 +429,41 @@ export class WeaponSystem {
   }
 
   /**
-   * Origin: in front of the torso at chest height.
+   * Origin: left shoulder, slightly in front of the body.
    * Direction: from that origin toward the world point under the screen crosshair.
    */
-  _computeChestToCrosshair(cameraPos, aimDir, player) {
+  _computeFireToCrosshair(cameraPos, aimDir, player) {
     const yaw = player ? player.cameraYaw : this.character.rotation.y;
-    this._chestForward.set(Math.sin(yaw), 0, Math.cos(yaw));
+    this._shoulderForward.set(Math.sin(yaw), 0, Math.cos(yaw));
+    // Character-left (opposite of +X right in yaw space)
+    this._shoulderLeft.set(-Math.cos(yaw), 0, Math.sin(yaw));
 
     this._muzzleWorld
       .copy(this.character.position)
-      .addScaledVector(this._chestForward, FIRE_CHEST_FORWARD);
-    this._muzzleWorld.y = this.character.position.y + FIRE_CHEST_Y;
+      .addScaledVector(this._shoulderForward, FIRE_SHOULDER_FORWARD)
+      .addScaledVector(this._shoulderLeft, FIRE_SHOULDER_LEFT);
+    this._muzzleWorld.y = this.character.position.y + FIRE_SHOULDER_Y;
 
     if (cameraPos && aimDir) {
       this._aimPoint.copy(cameraPos).addScaledVector(aimDir, FIRE_AIM_POINT_DIST);
     } else if (player) {
       player.getAimDirection(this._traceDir);
-      this._aimPoint
-        .copy(this._muzzleWorld)
-        .addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
+      if (cameraPos) {
+        this._aimPoint.copy(cameraPos).addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
+      } else {
+        this._aimPoint
+          .copy(this._muzzleWorld)
+          .addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
+      }
     } else {
       this._aimPoint
         .copy(this._muzzleWorld)
-        .addScaledVector(this._chestForward, FIRE_AIM_POINT_DIST);
+        .addScaledVector(this._shoulderForward, FIRE_AIM_POINT_DIST);
     }
 
     this._forward.subVectors(this._aimPoint, this._muzzleWorld);
     if (this._forward.lengthSq() < 1e-6) {
-      this._forward.copy(this._chestForward);
+      this._forward.copy(this._shoulderForward);
     } else {
       this._forward.normalize();
     }
@@ -623,7 +632,7 @@ export class WeaponSystem {
     const aim = player
       ? player.getAimDirection(this._traceDir)
       : this._aimDirRef;
-    this._computeChestToCrosshair(cameraPos || this._cameraPos, aim, player);
+    this._computeFireToCrosshair(cameraPos || this._cameraPos, aim, player);
     this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, GUN_TRACER_LENGTH);
 
     const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
@@ -651,7 +660,7 @@ export class WeaponSystem {
 
     this._aimDirRef = aimDir || null;
     this._cameraPos = cameraPos || null;
-    this._computeChestToCrosshair(cameraPos, aimDir, player);
+    this._computeFireToCrosshair(cameraPos, aimDir, player);
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
