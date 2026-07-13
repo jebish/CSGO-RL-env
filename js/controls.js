@@ -120,6 +120,15 @@ export class PlayerController {
     return target.set(Math.sin(this.cameraYaw), 0, Math.cos(this.cameraYaw)).normalize();
   }
 
+  getAimDirection(target = new THREE.Vector3()) {
+    const cosPitch = Math.cos(this.cameraPitch);
+    return target.set(
+      Math.sin(this.cameraYaw) * cosPitch,
+      Math.sin(this.cameraPitch),
+      Math.cos(this.cameraYaw) * cosPitch,
+    ).normalize();
+  }
+
   update(delta) {
     if (!this.enabled || !this.pointerLocked) return;
 

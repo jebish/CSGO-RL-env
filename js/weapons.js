@@ -16,6 +16,15 @@ const FLAME_PARTICLES = 220;
 const GUN_FIRE_INTERVAL = 1 / 8; // 8 rounds per second
 const GUN_RECOIL_MOVING_DEG = 6;
 const GUN_RECOIL_STILL_DEG = 3;
+const FLAME_USE_PER_SEC = 30;
+
+const AMMO_CONFIG = {
+  gun: { magSize: 80, reserve: 1000, reloadTime: 2 },
+  flamethrower: { magSize: 200, reserve: 2500, reloadTime: 4 },
+  melee: { infinite: true },
+};
+
+const INFINITY = '∞';
 
 /** Attachment / alt-part name fragments to strip from the PU-21 kit. */
 const GUN_DROP_NAME_PARTS = [
@@ -237,11 +246,22 @@ export class WeaponSystem {
     this.ready = false;
     this.index = 0;
     this.onWeaponChange = null;
+    this.onAmmoChange = null;
     this.lmbHeld = false;
     this.swingT = 0;
     this.swinging = false;
     this.gunCooldown = 0;
     this.muzzleFlashT = 0;
+    this._playerRef = null;
+    this.gunLoaded = false;
+    this.gunLoading = false;
+    this.reloading = null;
+    this.reloadTimer = 0;
+
+    this.ammo = {
+      gun: { mag: AMMO_CONFIG.gun.magSize, reserve: AMMO_CONFIG.gun.reserve },
+      flamethrower: { mag: AMMO_CONFIG.flamethrower.magSize, reserve: AMMO_CONFIG.flamethrower.reserve },
+    };
 
     this.root = new THREE.Group();
     this.root.position.copy(HAND_POS);
@@ -275,29 +295,30 @@ export class WeaponSystem {
     this._onWheel = this._onWheel.bind(this);
     this._onDown = this._onDown.bind(this);
     this._onUp = this._onUp.bind(this);
+    this._onKeyDown = this._onKeyDown.bind(this);
 
     window.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('mousedown', this._onDown);
     window.addEventListener('mouseup', this._onUp);
+    window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('blur', () => {
       this.lmbHeld = false;
     });
 
     this._loadModels();
+    this._notifyAmmo();
   }
 
   _loadModels() {
     const loader = new GLTFLoader();
-    const gun = createProceduralGun();
-    this.slots.gun.add(gun);
-    this.gunMuzzle = gun.userData.muzzle;
-
     let pending = 2;
     const done = () => {
       pending -= 1;
       if (pending <= 0) {
         this.ready = true;
         this._applyVisibility();
+        // Load the heavy gun model after lighter weapons so map boot isn't blocked.
+        this._loadGunModel();
       }
     };
 
@@ -326,12 +347,130 @@ export class WeaponSystem {
     }, undefined, done);
   }
 
+  _loadGunModel() {
+    if (this.gunLoaded || this.gunLoading) return;
+    this.gunLoading = true;
+
+    const loader = new GLTFLoader();
+    loader.load(
+      'assets/gun.glb',
+      (gltf) => {
+        const model = gltf.scene;
+        stripGunAttachments(model);
+        fitWeaponModel(model, 0.95);
+        model.rotation.set(0.05, Math.PI / 2, 0);
+        model.position.set(0.08, 0.02, 0);
+        this.slots.gun.add(model);
+
+        const muzzle = new THREE.Object3D();
+        muzzle.position.set(0.48, 0.06, 0);
+        this.slots.gun.add(muzzle);
+        this.gunMuzzle = muzzle;
+
+        this.gunLoaded = true;
+        this.gunLoading = false;
+        this._applyVisibility();
+      },
+      undefined,
+      (error) => {
+        console.error('Failed to load gun model', error);
+        this.gunLoading = false;
+      },
+    );
+  }
+
   get currentId() {
     return WEAPON_IDS[this.index];
   }
 
   get currentLabel() {
     return WEAPON_LABELS[this.currentId];
+  }
+
+  getAmmoDisplay(weaponId = this.currentId) {
+    const cfg = AMMO_CONFIG[weaponId];
+    if (cfg?.infinite) return `${INFINITY}-${INFINITY}`;
+    const state = this.ammo[weaponId];
+    return `${Math.floor(state.mag)}-${Math.floor(state.reserve)}`;
+  }
+
+  _notifyAmmo() {
+    if (this.onAmmoChange) this.onAmmoChange(this.getAmmoDisplay());
+  }
+
+  _setAimFromPlayer(player) {
+    if (player) {
+      player.getAimDirection(this._forward);
+    } else {
+      const yaw = this.character.rotation.y;
+      this._forward.set(Math.sin(yaw), 0, Math.cos(yaw));
+    }
+  }
+
+  _canUseAmmo(weaponId) {
+    const cfg = AMMO_CONFIG[weaponId];
+    if (cfg?.infinite) return true;
+    if (this.reloading === weaponId) return false;
+    return this.ammo[weaponId].mag > 0;
+  }
+
+  _consumeGunRound() {
+    const state = this.ammo.gun;
+    if (state.mag <= 0) return false;
+    state.mag -= 1;
+    this._notifyAmmo();
+    if (state.mag <= 0) this._startReload('gun', true);
+    return true;
+  }
+
+  _consumeFlame(delta) {
+    const state = this.ammo.flamethrower;
+    if (state.mag <= 0) return false;
+    const use = FLAME_USE_PER_SEC * delta;
+    state.mag = Math.max(0, state.mag - use);
+    this._notifyAmmo();
+    if (state.mag <= 0) this._startReload('flamethrower', true);
+    return true;
+  }
+
+  _startReload(weaponId, auto = false) {
+    const cfg = AMMO_CONFIG[weaponId];
+    if (!cfg || cfg.infinite) return false;
+    if (this.reloading) return false;
+
+    const state = this.ammo[weaponId];
+    if (state.mag >= cfg.magSize) return false;
+    if (state.reserve <= 0) return false;
+
+    this.reloading = weaponId;
+    this.reloadTimer = cfg.reloadTime;
+    if (!auto && this.onWeaponChange) this.onWeaponChange(`${WEAPON_LABELS[weaponId]} · reloading`);
+    this._notifyAmmo();
+    return true;
+  }
+
+  _finishReload() {
+    const weaponId = this.reloading;
+    if (!weaponId) return;
+
+    const cfg = AMMO_CONFIG[weaponId];
+    const state = this.ammo[weaponId];
+    const needed = cfg.magSize - state.mag;
+    const transfer = Math.min(needed, state.reserve);
+    state.mag += transfer;
+    state.reserve -= transfer;
+
+    this.reloading = null;
+    this.reloadTimer = 0;
+    if (this.onWeaponChange) this.onWeaponChange(this.currentLabel);
+    this._notifyAmmo();
+  }
+
+  requestReload() {
+    if (!this._pointerLocked()) return;
+    const id = this.currentId;
+    if (AMMO_CONFIG[id]?.infinite) return;
+    this._startReload(id, false);
   }
 
   _applyVisibility() {
@@ -350,8 +489,17 @@ export class WeaponSystem {
     this.swingT = 0;
     this.slots.melee.rotation.set(0, 0, 0);
     this.lmbHeld = this.lmbHeld && this.currentId === 'flamethrower';
+    if (this.currentId === 'gun') this._loadGunModel();
     this._applyVisibility();
     if (this.onWeaponChange) this.onWeaponChange(this.currentLabel);
+    this._notifyAmmo();
+  }
+
+  _onKeyDown(event) {
+    if (event.code !== 'KeyR' || event.repeat) return;
+    if (!this._pointerLocked()) return;
+    event.preventDefault();
+    this.requestReload();
   }
 
   _pointerLocked() {
@@ -369,7 +517,7 @@ export class WeaponSystem {
     if (event.button !== 0 || !this._pointerLocked()) return;
     this.lmbHeld = true;
     if (this.currentId === 'melee') this._startSwing();
-    if (this.currentId === 'gun') this._fireGun();
+    if (this.currentId === 'gun') this._fireGun(this._playerRef);
   }
 
   _onUp(event) {
@@ -383,19 +531,42 @@ export class WeaponSystem {
     this.swingT = 0;
   }
 
-  _fireGun() {
-    if (this.gunCooldown > 0) return;
-    this.gunCooldown = 0.22;
-    this.muzzleFlashT = 0.07;
+  _applyGunRecoil(player) {
+    if (!player) return;
+    const coneDeg = player.isMoving() ? GUN_RECOIL_MOVING_DEG : GUN_RECOIL_STILL_DEG;
+    const half = THREE.MathUtils.degToRad(coneDeg * 0.5);
+    // Random kick inside a circular FOV cone (horizontal + vertical)
+    const r = Math.sqrt(Math.random()) * half;
+    const theta = Math.random() * Math.PI * 2;
+    const yawKick = Math.cos(theta) * r;
+    const pitchKick = Math.sin(theta) * r;
+    player.applyRecoil(yawKick, pitchKick);
+  }
 
-    const yaw = this.character.rotation.y;
-    this._forward.set(Math.sin(yaw), 0, Math.cos(yaw));
+  _fireGun(player) {
+    if (!this.gunLoaded) {
+      this._loadGunModel();
+      return;
+    }
+    if (this.reloading === 'gun') return;
+    if (this.gunCooldown > 0) return;
+    if (!this._canUseAmmo('gun')) {
+      this._startReload('gun', true);
+      return;
+    }
+
+    this.gunCooldown = GUN_FIRE_INTERVAL;
+    this.muzzleFlashT = 0.05;
+    this._applyGunRecoil(player);
+    if (!this._consumeGunRound()) return;
+
+    this._setAimFromPlayer(player);
 
     const muzzle = this.gunMuzzle || this.root;
     muzzle.getWorldPosition(this._muzzleWorld);
-    this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, 18);
+    this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, 22);
 
-    const geo = new THREE.CylinderGeometry(0.012, 0.012, 1, 5);
+    const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
     geo.rotateX(Math.PI / 2);
     const mesh = new THREE.Mesh(geo, this._tracerMat);
     const mid = this._muzzleWorld.clone().lerp(this._aimEnd, 0.5);
@@ -403,16 +574,22 @@ export class WeaponSystem {
     mesh.scale.z = this._muzzleWorld.distanceTo(this._aimEnd);
     mesh.lookAt(this._aimEnd);
     this.scene.add(mesh);
-    this.tracers.push({ mesh, life: 0.08 });
+    this.tracers.push({ mesh, life: 0.06 });
   }
 
-  update(delta, characterYaw) {
+  update(delta, player) {
     if (!this.ready) return;
+    this._playerRef = player || null;
+
+    if (this.reloading) {
+      this.reloadTimer -= delta;
+      if (this.reloadTimer <= 0) this._finishReload();
+    }
 
     this.gunCooldown = Math.max(0, this.gunCooldown - delta);
     this.muzzleFlashT = Math.max(0, this.muzzleFlashT - delta);
 
-    this._forward.set(Math.sin(characterYaw), 0, Math.cos(characterYaw));
+    this._setAimFromPlayer(player);
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
@@ -424,8 +601,18 @@ export class WeaponSystem {
       }
     }
 
+    if (this.currentId === 'gun' && this.lmbHeld && this._pointerLocked() && !this.reloading) {
+      this._fireGun(player);
+    }
+
     if (this.currentId === 'flamethrower') {
-      const firing = this.lmbHeld && this._pointerLocked();
+      const wantsFire = this.lmbHeld && this._pointerLocked() && !this.reloading;
+      const canFire = wantsFire && this._canUseAmmo('flamethrower');
+      if (wantsFire && !canFire) this._startReload('flamethrower', true);
+
+      const firing = wantsFire && canFire;
+      if (firing) this._consumeFlame(delta);
+
       this.flame.setFiring(firing);
       const nozzle = this.flameNozzle || this.root;
       nozzle.getWorldPosition(this._muzzleWorld);
@@ -435,7 +622,7 @@ export class WeaponSystem {
       this.muzzleLight.color.setHex(0xff7722);
     } else if (this.currentId === 'gun') {
       this.flame.setFiring(false);
-      this.muzzleLight.position.set(0.22, 0.05, 0);
+      this.muzzleLight.position.set(0.4, 0.05, 0);
       this.muzzleLight.color.setHex(0xffcc66);
       this.muzzleLight.intensity = this.muzzleFlashT > 0 ? 3.5 : 0;
     } else {
@@ -465,6 +652,7 @@ export class WeaponSystem {
     window.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('mousedown', this._onDown);
     window.removeEventListener('mouseup', this._onUp);
+    window.removeEventListener('keydown', this._onKeyDown);
     this.flame.dispose();
   }
 }

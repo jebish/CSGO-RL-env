@@ -17,9 +17,27 @@ const panelBody = document.getElementById('panel-body');
 const panelClose = document.getElementById('panel-close');
 const footerText = document.getElementById('footer-text');
 const weaponHud = document.getElementById('weapon-hud');
+const ammoHud = document.getElementById('ammo-hud');
+
+function setStatus(text) {
+  if (footerText) footerText.textContent = text;
+}
+
+window.addEventListener('error', (event) => {
+  console.error(event.error || event.message);
+  setStatus(`Failed to start — ${event.message}`);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error(event.reason);
+  const msg = event.reason?.message || String(event.reason);
+  setStatus(`Failed to start — ${msg}`);
+});
+
+setStatus('Starting engine…');
 
 const CONTROLS_LINE =
-  'WASD move · Space jump · Shift sprint · Mouse look · Scroll weapons · LMB fire/swing · E interact · Click game to capture mouse · Esc release';
+  'WASD move · Space jump · Shift sprint · Mouse look · Scroll weapons · LMB fire/swing · R reload · E interact · Click game to capture mouse · Esc release';
 
 const CHARACTER_MODEL_YAW = -Math.PI / 2;
 const CHARACTER_WIDTH_SCALE = 0.93;
@@ -76,7 +94,8 @@ let weapons = null;
 let mapLoaded = false;
 let characterReady = false;
 const clock = new THREE.Clock();
-const loader = new GLTFLoader();
+const mapLoader = new GLTFLoader();
+const characterLoader = new GLTFLoader();
 
 function fitCharacterModel(model) {
   const box = new THREE.Box3().setFromObject(model);
@@ -94,22 +113,42 @@ function fitCharacterModel(model) {
   });
 }
 
-loader.load('assets/character.glb', (gltf) => {
-  const model = gltf.scene;
-  fitCharacterModel(model);
-  character.add(model);
-  characterReady = true;
+function initWeapons() {
+  if (weapons || !characterReady || !mapLoaded) return;
   weapons = new WeaponSystem(scene, character, renderer.domElement);
   weapons.onWeaponChange = (label) => {
     if (weaponHud) weaponHud.textContent = label;
   };
+  weapons.onAmmoChange = (text) => {
+    if (ammoHud) ammoHud.textContent = text;
+  };
   if (weaponHud) weaponHud.textContent = weapons.currentLabel;
-});
+  if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
+}
 
-loader.load(
+setStatus('Loading character…');
+characterLoader.load(
+  'assets/character.glb',
+  (gltf) => {
+    const model = gltf.scene;
+    fitCharacterModel(model);
+    character.add(model);
+    characterReady = true;
+    initWeapons();
+  },
+  undefined,
+  (error) => {
+    console.error(error);
+    setStatus('Failed to load character — check console');
+  },
+);
+
+setStatus('Loading map…');
+mapLoader.load(
   'assets/map.glb',
   (gltf) => {
     try {
+      setStatus('Processing map…');
       mapRoot = gltf.scene;
       mapRoot.traverse((child) => {
         if (child.isMesh) {
@@ -143,9 +182,8 @@ loader.load(
       collisionWorld.setBounds(mapBox);
       const spawn = dropSpawnFromCorner(mapRoot, collisionWorld);
 
-      footerText.textContent = 'Building minimap…';
+      setStatus('Building minimap…');
       minimap.bake(collectMapMeshes(mapRoot), mapBox);
-      footerText.textContent = CONTROLS_LINE;
 
       player = new PlayerController(renderer.domElement, collisionWorld);
       player.setPosition(spawn.x, spawn.y, spawn.z);
@@ -157,20 +195,24 @@ loader.load(
       interactables.build();
 
       mapLoaded = true;
+      initWeapons();
+      setStatus(CONTROLS_LINE);
     } catch (err) {
       console.error(err);
-      footerText.textContent = `Failed to start — ${err.message}`;
+      setStatus(`Failed to start — ${err.message}`);
     }
   },
   (progress) => {
     if (progress.total > 0) {
       const pct = Math.round((progress.loaded / progress.total) * 100);
-      footerText.textContent = `Loading map… ${pct}%`;
+      setStatus(`Loading map… ${pct}%`);
+    } else {
+      setStatus('Loading map…');
     }
   },
   (error) => {
     console.error(error);
-    footerText.textContent = 'Failed to load map — check console';
+    setStatus('Failed to load map — check console');
   },
 );
 
@@ -237,7 +279,7 @@ function animate() {
     character.visible = characterReady;
 
     if (weapons) {
-      weapons.update(delta, player.characterYaw);
+      weapons.update(delta, player);
     }
 
     updateThirdPersonCamera(feet, player.cameraYaw, player.cameraPitch);
