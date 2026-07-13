@@ -2,13 +2,17 @@ import * as THREE from 'three';
 
 export const PLAYER_HEIGHT = 1.31;
 export const PLAYER_RADIUS = 0.235;
-const GROUND_EPSILON = 0.08;
-const MIN_WALKABLE_NORMAL_Y = 0.35;
+/** Keep soles slightly above walkable surfaces so ankle rays don't dig into floors. */
+const GROUND_SKIN = 0.04;
+const GROUND_SNAP = 0.14;
+const MIN_WALKABLE_NORMAL_Y = 0.45;
 const DROP_HEIGHT = 45;
 const SPAWN_INSET_X = 22;
 const SPAWN_INSET_Z = 20;
 const BOUNDS_INSET = 1.2;
 const BOUNDS_WALL_THICKNESS = 1.5;
+/** Lowest body probe — above typical floor bumps so flats don't register as walls. */
+const BODY_PROBE_MIN_Y = 0.42;
 
 const HORIZONTAL_DIRS = [
   new THREE.Vector3(1, 0, 0),
@@ -154,7 +158,7 @@ export class CollisionWorld {
       state.onGround = true;
     }
 
-    this.liftToClear(feet);
+    this.snapToGroundSkin(feet);
     this.clampToBounds(feet);
     return feet;
   }
@@ -165,28 +169,38 @@ export class CollisionWorld {
     this.raycaster.far = 250;
     const hits = this.raycaster.intersectObjects(this.meshes, false);
 
-    let lowest = null;
+    // First walkable hit from above = standing surface (not underground shells).
     for (const hit of hits) {
       if (!isWalkableHit(hit)) continue;
-      if (lowest === null || hit.point.y < lowest) {
-        lowest = hit.point.y;
-      }
+      return hit.point.y + GROUND_SKIN;
     }
 
-    return lowest === null ? null : lowest + GROUND_EPSILON;
+    return null;
+  }
+
+  snapToGroundSkin(feet) {
+    const groundY = this.probeGround(feet);
+    if (groundY !== null) {
+      feet.y = Math.max(feet.y, groundY);
+    }
+    this.liftToClear(feet);
   }
 
   liftToClear(feet) {
     for (let i = 0; i < 40; i += 1) {
-      if (!this.intersectsFeet(feet)) return;
-      feet.y += 0.15;
+      if (!this.intersectsWalls(feet)) return;
+      feet.y += 0.08;
     }
   }
 
-  intersectsFeet(feet) {
+  /**
+   * Horizontal blocking only against walls/steep faces.
+   * Walkable floors are ignored so bumpy open ground can't trap movement or cancel jumps.
+   */
+  intersectsWalls(feet) {
     const bodyHeights = [
-      feet.y + PLAYER_RADIUS,
-      feet.y + PLAYER_HEIGHT * 0.5,
+      feet.y + BODY_PROBE_MIN_Y,
+      feet.y + PLAYER_HEIGHT * 0.55,
       feet.y + PLAYER_HEIGHT - PLAYER_RADIUS,
     ];
 
@@ -194,8 +208,10 @@ export class CollisionWorld {
       for (const dir of HORIZONTAL_DIRS) {
         this.origin.set(feet.x, y, feet.z);
         this.raycaster.set(this.origin, dir);
-        this.raycaster.far = PLAYER_RADIUS + 0.08;
-        if (this.raycaster.intersectObjects(this.meshes, false).length > 0) {
+        this.raycaster.far = PLAYER_RADIUS + 0.06;
+        const hits = this.raycaster.intersectObjects(this.meshes, false);
+        for (const hit of hits) {
+          if (isWalkableHit(hit)) continue;
           return true;
         }
       }
@@ -207,16 +223,21 @@ export class CollisionWorld {
   moveAndSlide(feet, delta) {
     const tryX = feet.x + delta.x;
     const testX = new THREE.Vector3(tryX, feet.y, feet.z);
-    if (!this.intersectsFeet(testX)) {
+    if (!this.intersectsWalls(testX)) {
       feet.x = tryX;
     }
 
     const tryZ = feet.z + delta.z;
     const testZ = new THREE.Vector3(feet.x, feet.y, tryZ);
-    if (!this.intersectsFeet(testZ)) {
+    if (!this.intersectsWalls(testZ)) {
       feet.z = tryZ;
     }
 
+    // Keep a small air gap over flats after sliding.
+    const groundY = this.probeGround(feet);
+    if (groundY !== null && feet.y < groundY + GROUND_SNAP) {
+      feet.y = groundY;
+    }
     this.liftToClear(feet);
     this.clampToBounds(feet);
   }
@@ -229,12 +250,12 @@ export class CollisionWorld {
 
     for (const hit of hits) {
       if (!isWalkableHit(hit)) continue;
-      if (hit.point.y <= feet.y + 0.8) {
-        return hit.point.y + GROUND_EPSILON;
+      if (hit.point.y <= feet.y + 0.9) {
+        return hit.point.y + GROUND_SKIN;
       }
     }
 
-    return feet.y;
+    return null;
   }
 
   moveVertical(feet, velocityY, delta, state) {
@@ -244,10 +265,24 @@ export class CollisionWorld {
     const nextY = feet.y + step;
     const test = new THREE.Vector3(feet.x, nextY, feet.z);
 
-    if (!this.intersectsFeet(test)) {
+    // Jumping: only cancel on real ceiling/wall hits, never on floors.
+    if (step > 0) {
+      if (this.intersectsWalls(test)) {
+        state.velocityY = 0;
+        state.onGround = false;
+        return;
+      }
+      feet.y = nextY;
+      state.onGround = false;
+      this.clampToBounds(feet);
+      return;
+    }
+
+    // Falling
+    if (!this.intersectsWalls(test)) {
       feet.y = nextY;
       const groundY = this.probeGround(feet);
-      if (feet.y <= groundY + 0.12) {
+      if (groundY !== null && feet.y <= groundY + GROUND_SNAP) {
         feet.y = groundY;
         state.velocityY = 0;
         state.onGround = true;
@@ -258,13 +293,8 @@ export class CollisionWorld {
       return;
     }
 
-    if (step > 0) {
-      state.velocityY = 0;
-      state.onGround = false;
-      return;
-    }
-
-    feet.y = this.probeGround(feet);
+    const groundY = this.probeGround(feet);
+    feet.y = groundY !== null ? groundY : feet.y;
     state.velocityY = 0;
     state.onGround = true;
     this.liftToClear(feet);

@@ -18,8 +18,10 @@ const GUN_RECOIL_MOVING_DEG = 6;
 const GUN_RECOIL_SCOPED_DEG = 4; // between stationary and moving (placeholder)
 const GUN_RECOIL_STILL_DEG = 3;
 const FLAME_USE_PER_SEC = 30;
-/** Fire from the view center ray (matches crosshair), not the side-held weapon model. */
-const FIRE_ORIGIN_AHEAD = 0.85;
+/** Chest-front fire origin → toward camera crosshair aim point (classic TPS). */
+const FIRE_CHEST_Y = 0.95;
+const FIRE_CHEST_FORWARD = 0.42;
+const FIRE_AIM_POINT_DIST = 80;
 const GUN_TRACER_LENGTH = 16;
 
 const AMMO_CONFIG = {
@@ -269,6 +271,7 @@ export class WeaponSystem {
     this.reloading = null;
     this.reloadTimer = 0;
     this._cameraPos = null;
+    this._aimDirRef = null;
     this.scoping = false;
 
     this.ammo = {
@@ -305,6 +308,8 @@ export class WeaponSystem {
     this._forward = new THREE.Vector3();
     this._muzzleWorld = new THREE.Vector3();
     this._aimEnd = new THREE.Vector3();
+    this._aimPoint = new THREE.Vector3();
+    this._chestForward = new THREE.Vector3();
     this._traceDir = new THREE.Vector3();
     this._onWheel = this._onWheel.bind(this);
     this._onDown = this._onDown.bind(this);
@@ -421,26 +426,38 @@ export class WeaponSystem {
     if (this.onAmmoChange) this.onAmmoChange(this.getAmmoDisplay());
   }
 
-  _setAimDirection(aimDir, player) {
-    if (aimDir) {
-      this._forward.copy(aimDir);
-    } else if (player) {
-      player.getAimDirection(this._forward);
-    } else {
-      const yaw = this.character.rotation.y;
-      this._forward.set(Math.sin(yaw), 0, Math.cos(yaw));
-    }
-  }
+  /**
+   * Origin: in front of the torso at chest height.
+   * Direction: from that origin toward the world point under the screen crosshair.
+   */
+  _computeChestToCrosshair(cameraPos, aimDir, player) {
+    const yaw = player ? player.cameraYaw : this.character.rotation.y;
+    this._chestForward.set(Math.sin(yaw), 0, Math.cos(yaw));
 
-  /** Origin on the screen-center aim ray, just ahead of the camera. */
-  _getCenterFireOrigin(cameraPos, target = this._muzzleWorld) {
-    if (cameraPos) {
-      return target.copy(cameraPos).addScaledVector(this._forward, FIRE_ORIGIN_AHEAD);
+    this._muzzleWorld
+      .copy(this.character.position)
+      .addScaledVector(this._chestForward, FIRE_CHEST_FORWARD);
+    this._muzzleWorld.y = this.character.position.y + FIRE_CHEST_Y;
+
+    if (cameraPos && aimDir) {
+      this._aimPoint.copy(cameraPos).addScaledVector(aimDir, FIRE_AIM_POINT_DIST);
+    } else if (player) {
+      player.getAimDirection(this._traceDir);
+      this._aimPoint
+        .copy(this._muzzleWorld)
+        .addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
+    } else {
+      this._aimPoint
+        .copy(this._muzzleWorld)
+        .addScaledVector(this._chestForward, FIRE_AIM_POINT_DIST);
     }
-    // Fallback: in front of the character torso
-    target.copy(this.character.position);
-    target.y += 1.05;
-    return target.addScaledVector(this._forward, FIRE_ORIGIN_AHEAD);
+
+    this._forward.subVectors(this._aimPoint, this._muzzleWorld);
+    if (this._forward.lengthSq() < 1e-6) {
+      this._forward.copy(this._chestForward);
+    } else {
+      this._forward.normalize();
+    }
   }
 
   _canUseAmmo(weaponId) {
@@ -602,9 +619,11 @@ export class WeaponSystem {
     this._applyGunRecoil(player);
     if (!this._consumeGunRound()) return;
 
-    this._setAimDirection(null, player);
-    // Keep shots on the crosshair ray (center), not the side-held gun model.
-    this._getCenterFireOrigin(cameraPos || this._cameraPos, this._muzzleWorld);
+    // After recoil, rebuild chest→crosshair using the updated look angles.
+    const aim = player
+      ? player.getAimDirection(this._traceDir)
+      : this._aimDirRef;
+    this._computeChestToCrosshair(cameraPos || this._cameraPos, aim, player);
     this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, GUN_TRACER_LENGTH);
 
     const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
@@ -630,8 +649,9 @@ export class WeaponSystem {
     this.gunCooldown = Math.max(0, this.gunCooldown - delta);
     this.muzzleFlashT = Math.max(0, this.muzzleFlashT - delta);
 
-    this._setAimDirection(aimDir, player);
+    this._aimDirRef = aimDir || null;
     this._cameraPos = cameraPos || null;
+    this._computeChestToCrosshair(cameraPos, aimDir, player);
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
@@ -656,7 +676,6 @@ export class WeaponSystem {
       if (firing) this._consumeFlame(delta);
 
       this.flame.setFiring(firing);
-      this._getCenterFireOrigin(cameraPos || this._cameraPos, this._muzzleWorld);
       this.flame.update(delta, this._muzzleWorld, this._forward);
       this.muzzleLight.position.set(0.2, 0.05, 0);
       this.muzzleLight.intensity = firing ? 2.2 + Math.random() : 0;
