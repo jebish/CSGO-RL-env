@@ -18,10 +18,10 @@ const GUN_RECOIL_MOVING_DEG = 6;
 const GUN_RECOIL_SCOPED_DEG = 4; // between stationary and moving (placeholder)
 const GUN_RECOIL_STILL_DEG = 3;
 const FLAME_USE_PER_SEC = 30;
-/** Left-shoulder fire origin → toward camera crosshair aim point (classic TPS). */
+/** View-left shoulder origin (screen-left), fire toward crosshair aim point. */
 const FIRE_SHOULDER_Y = 1.18;
 const FIRE_SHOULDER_FORWARD = 0.28;
-const FIRE_SHOULDER_LEFT = 0.22;
+const FIRE_VIEW_LEFT = 0.28;
 const FIRE_AIM_POINT_DIST = 80;
 const GUN_TRACER_LENGTH = 16;
 
@@ -295,8 +295,9 @@ export class WeaponSystem {
     }
 
     this.flame = new FlameCone(scene);
-    this.muzzleLight = new THREE.PointLight(0xffcc66, 0, 4, 2);
-    this.root.add(this.muzzleLight);
+    // Keep light in the scene graph (not under character) so it works while scoped/hidden.
+    this.muzzleLight = new THREE.PointLight(0xffcc66, 0, 5, 2);
+    scene.add(this.muzzleLight);
 
     this.tracers = [];
     this._tracerMat = new THREE.MeshBasicMaterial({
@@ -311,7 +312,9 @@ export class WeaponSystem {
     this._aimEnd = new THREE.Vector3();
     this._aimPoint = new THREE.Vector3();
     this._shoulderForward = new THREE.Vector3();
-    this._shoulderLeft = new THREE.Vector3();
+    this._viewLeft = new THREE.Vector3();
+    this._viewRight = new THREE.Vector3();
+    this._worldUp = new THREE.Vector3(0, 1, 0);
     this._traceDir = new THREE.Vector3();
     this._onWheel = this._onWheel.bind(this);
     this._onDown = this._onDown.bind(this);
@@ -429,32 +432,31 @@ export class WeaponSystem {
   }
 
   /**
-   * Origin: left shoulder, slightly in front of the body.
+   * Origin: view-left shoulder (screen-left from camera), slightly in front of the body.
    * Direction: from that origin toward the world point under the screen crosshair.
    */
   _computeFireToCrosshair(cameraPos, aimDir, player) {
     const yaw = player ? player.cameraYaw : this.character.rotation.y;
     this._shoulderForward.set(Math.sin(yaw), 0, Math.cos(yaw));
-    // Character-left (opposite of +X right in yaw space)
-    this._shoulderLeft.set(-Math.cos(yaw), 0, Math.sin(yaw));
+
+    // Screen-left relative to look direction (not character model left).
+    const look = aimDir || (player ? player.getAimDirection(this._traceDir) : this._shoulderForward);
+    this._viewRight.crossVectors(look, this._worldUp);
+    if (this._viewRight.lengthSq() < 1e-6) {
+      this._viewRight.set(1, 0, 0);
+    } else {
+      this._viewRight.normalize();
+    }
+    this._viewLeft.copy(this._viewRight).multiplyScalar(-1);
 
     this._muzzleWorld
       .copy(this.character.position)
       .addScaledVector(this._shoulderForward, FIRE_SHOULDER_FORWARD)
-      .addScaledVector(this._shoulderLeft, FIRE_SHOULDER_LEFT);
+      .addScaledVector(this._viewLeft, FIRE_VIEW_LEFT);
     this._muzzleWorld.y = this.character.position.y + FIRE_SHOULDER_Y;
 
-    if (cameraPos && aimDir) {
-      this._aimPoint.copy(cameraPos).addScaledVector(aimDir, FIRE_AIM_POINT_DIST);
-    } else if (player) {
-      player.getAimDirection(this._traceDir);
-      if (cameraPos) {
-        this._aimPoint.copy(cameraPos).addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
-      } else {
-        this._aimPoint
-          .copy(this._muzzleWorld)
-          .addScaledVector(this._traceDir, FIRE_AIM_POINT_DIST);
-      }
+    if (cameraPos && look) {
+      this._aimPoint.copy(cameraPos).addScaledVector(look, FIRE_AIM_POINT_DIST);
     } else {
       this._aimPoint
         .copy(this._muzzleWorld)
@@ -466,6 +468,14 @@ export class WeaponSystem {
       this._forward.copy(this._shoulderForward);
     } else {
       this._forward.normalize();
+    }
+  }
+
+  _updateMuzzleLight(active, colorHex, intensity) {
+    this.muzzleLight.color.setHex(colorHex);
+    this.muzzleLight.intensity = active ? intensity : 0;
+    if (active) {
+      this.muzzleLight.position.copy(this._muzzleWorld);
     }
   }
 
@@ -686,17 +696,13 @@ export class WeaponSystem {
 
       this.flame.setFiring(firing);
       this.flame.update(delta, this._muzzleWorld, this._forward);
-      this.muzzleLight.position.set(0.2, 0.05, 0);
-      this.muzzleLight.intensity = firing ? 2.2 + Math.random() : 0;
-      this.muzzleLight.color.setHex(0xff7722);
+      this._updateMuzzleLight(firing, 0xff7722, 2.2 + Math.random());
     } else if (this.currentId === 'gun') {
       this.flame.setFiring(false);
-      this.muzzleLight.position.set(0.4, 0.05, 0);
-      this.muzzleLight.color.setHex(0xffcc66);
-      this.muzzleLight.intensity = this.muzzleFlashT > 0 ? 3.5 : 0;
+      this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffcc66, 3.5);
     } else {
       this.flame.setFiring(false);
-      this.muzzleLight.intensity = 0;
+      this._updateMuzzleLight(false, 0xffcc66, 0);
     }
 
     if (this.currentId === 'melee' && this.swinging) {
@@ -722,6 +728,7 @@ export class WeaponSystem {
     window.removeEventListener('mousedown', this._onDown);
     window.removeEventListener('mouseup', this._onUp);
     window.removeEventListener('keydown', this._onKeyDown);
+    this.scene.remove(this.muzzleLight);
     this.flame.dispose();
   }
 }
