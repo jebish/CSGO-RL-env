@@ -100,6 +100,7 @@ const worldAimDir = new THREE.Vector3();
 
 let mapRoot = new THREE.Group();
 let collisionWorld = null;
+let mapHitMeshes = [];
 let player = null;
 let interactables = null;
 let weapons = null;
@@ -128,6 +129,7 @@ function fitCharacterModel(model) {
 function initWeapons() {
   if (weapons || !characterReady || !mapLoaded) return;
   weapons = new WeaponSystem(scene, character, renderer.domElement);
+  weapons.setImpactMeshes(mapHitMeshes);
   weapons.onWeaponChange = (label) => {
     if (weaponHud) weaponHud.textContent = label;
     if (!weapons.canScope()) setScoping(false);
@@ -194,6 +196,7 @@ mapLoader.load(
       collisionWorld = new CollisionWorld(collisionMeshes);
       collisionWorld.setBounds(mapBox);
       const spawn = dropSpawnFromCorner(mapRoot, collisionWorld);
+      mapHitMeshes = collectMapMeshes(mapRoot);
 
       setStatus('Building minimap…');
       minimap.bake(collectMapMeshes(mapRoot), mapBox);
@@ -285,6 +288,7 @@ function hidePanel() {
 renderer.domElement.addEventListener('click', () => {
   if (player && mapLoaded && panel.hidden) {
     weather.startRainAudio();
+    if (weapons) weapons.initAudio();
     player.requestPointerLock();
   }
 });

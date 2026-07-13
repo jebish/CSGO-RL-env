@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { WeaponAudio } from './weapon-audio.js';
+import { ImpactSystem } from './impacts.js';
 
 const WEAPON_IDS = ['gun', 'flamethrower', 'melee'];
 const WEAPON_LABELS = {
@@ -299,6 +301,10 @@ export class WeaponSystem {
     this.muzzleLight = new THREE.PointLight(0xffcc66, 0, 5, 2);
     scene.add(this.muzzleLight);
 
+    this.audio = new WeaponAudio();
+    this.impacts = new ImpactSystem(scene);
+    this._flameWasFiring = false;
+
     this.tracers = [];
     this._tracerMat = new THREE.MeshBasicMaterial({
       color: 0xffe08a,
@@ -401,6 +407,14 @@ export class WeaponSystem {
         this.gunLoading = false;
       },
     );
+  }
+
+  setImpactMeshes(meshes) {
+    this.impacts.setMeshes(meshes);
+  }
+
+  async initAudio() {
+    await this.audio.init();
   }
 
   get currentId() {
@@ -561,6 +575,10 @@ export class WeaponSystem {
     this.swingT = 0;
     this.slots.melee.rotation.set(0, 0, 0);
     this.lmbHeld = this.lmbHeld && this.currentId === 'flamethrower';
+    if (this._flameWasFiring) {
+      this.audio.setFlamethrowerFiring(false);
+      this._flameWasFiring = false;
+    }
     if (!this.canScope()) this.scoping = false;
     if (this.currentId === 'gun') this._loadGunModel();
     this._applyVisibility();
@@ -602,6 +620,7 @@ export class WeaponSystem {
     if (this.swinging) return;
     this.swinging = true;
     this.swingT = 0;
+    this.audio.playMeleeSwing();
   }
 
   _applyGunRecoil(player) {
@@ -643,7 +662,18 @@ export class WeaponSystem {
       ? player.getAimDirection(this._traceDir)
       : this._aimDirRef;
     this._computeFireToCrosshair(cameraPos || this._cameraPos, aim, player);
-    this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, GUN_TRACER_LENGTH);
+    this.audio.playGunShot();
+
+    const hitPoint = this.impacts.raycastBullet(
+      this._muzzleWorld,
+      this._forward,
+      FIRE_AIM_POINT_DIST,
+    );
+    if (hitPoint) {
+      this._aimEnd.copy(hitPoint);
+    } else {
+      this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, GUN_TRACER_LENGTH);
+    }
 
     const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
     geo.rotateX(Math.PI / 2);
@@ -671,6 +701,7 @@ export class WeaponSystem {
     this._aimDirRef = aimDir || null;
     this._cameraPos = cameraPos || null;
     this._computeFireToCrosshair(cameraPos, aimDir, player);
+    this.impacts.update();
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
@@ -692,17 +723,36 @@ export class WeaponSystem {
       if (wantsFire && !canFire) this._startReload('flamethrower', true);
 
       const firing = wantsFire && canFire;
-      if (firing) this._consumeFlame(delta);
+      if (firing) {
+        this._consumeFlame(delta);
+        this.impacts.applyFlame(
+          this._muzzleWorld,
+          this._forward,
+          FLAME_RANGE,
+          FLAME_HALF_ANGLE,
+        );
+      }
+
+      if (firing !== this._flameWasFiring) {
+        this.audio.setFlamethrowerFiring(firing);
+        this._flameWasFiring = firing;
+      }
 
       this.flame.setFiring(firing);
       this.flame.update(delta, this._muzzleWorld, this._forward);
       this._updateMuzzleLight(firing, 0xff7722, 2.2 + Math.random());
-    } else if (this.currentId === 'gun') {
-      this.flame.setFiring(false);
-      this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffcc66, 3.5);
     } else {
-      this.flame.setFiring(false);
-      this._updateMuzzleLight(false, 0xffcc66, 0);
+      if (this._flameWasFiring) {
+        this.audio.setFlamethrowerFiring(false);
+        this._flameWasFiring = false;
+      }
+      if (this.currentId === 'gun') {
+        this.flame.setFiring(false);
+        this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffcc66, 3.5);
+      } else {
+        this.flame.setFiring(false);
+        this._updateMuzzleLight(false, 0xffcc66, 0);
+      }
     }
 
     if (this.currentId === 'melee' && this.swinging) {
@@ -728,6 +778,7 @@ export class WeaponSystem {
     window.removeEventListener('mousedown', this._onDown);
     window.removeEventListener('mouseup', this._onUp);
     window.removeEventListener('keydown', this._onKeyDown);
+    this.audio.stopAll();
     this.scene.remove(this.muzzleLight);
     this.flame.dispose();
   }
