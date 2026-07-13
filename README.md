@@ -2,7 +2,7 @@
 bash start.sh
 ```
 
- #**Placeholders needing improvements**
+ # **Placeholders needing improvements**
  - Weapon firing/usage/reload graphics (bullets, melee, flamethrower, ....)
  - User char graphics (requires blender 3d model inplace of .glb char)
 
