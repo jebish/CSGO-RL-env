@@ -5,7 +5,7 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js';
-import { WeaponSystem } from './weapons.js';
+import { WeaponSystem } from './weapons.js?v=6';
 
 const hud = document.getElementById('hud');
 const minimapWrap = document.getElementById('minimap-wrap');
@@ -24,15 +24,19 @@ function setStatus(text) {
   if (footerText) footerText.textContent = text;
 }
 
+let bootComplete = false;
+
 window.addEventListener('error', (event) => {
   console.error(event.error || event.message);
-  setStatus(`Failed to start — ${event.message}`);
+  const prefix = bootComplete ? 'Runtime error' : 'Failed to start';
+  setStatus(`${prefix} — ${event.message}`);
 });
 
 window.addEventListener('unhandledrejection', (event) => {
   console.error(event.reason);
   const msg = event.reason?.message || String(event.reason);
-  setStatus(`Failed to start — ${msg}`);
+  const prefix = bootComplete ? 'Runtime error' : 'Failed to start';
+  setStatus(`${prefix} — ${msg}`);
 });
 
 setStatus('Starting engine…');
@@ -47,7 +51,6 @@ const CAMERA_HEAD_Y = 1.22;
 const CAMERA_LIFT = 0.12;
 const AIM_LOOK_DISTANCE = 48;
 const CAMERA_FOV = 70;
-const SCOPE_FOV = 36;
 const SCOPE_DISTANCE = 0.42;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -130,14 +133,14 @@ function initWeapons() {
   if (weapons || !characterReady || !mapLoaded) return;
   weapons = new WeaponSystem(scene, character, renderer.domElement);
   weapons.setImpactMeshes(mapHitMeshes);
-  weapons.onWeaponChange = (label) => {
-    if (weaponHud) weaponHud.textContent = label;
+  weapons.onWeaponChange = (weaponId) => {
+    if (weaponHud) weaponHud.dataset.weapon = weaponId;
     if (!weapons.canScope()) setScoping(false);
   };
   weapons.onAmmoChange = (text) => {
     if (ammoHud) ammoHud.textContent = text;
   };
-  if (weaponHud) weaponHud.textContent = weapons.currentLabel;
+  if (weaponHud) weaponHud.dataset.weapon = weapons.currentId;
   if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
 }
 
@@ -211,6 +214,7 @@ mapLoader.load(
       interactables.build();
 
       mapLoaded = true;
+      bootComplete = true;
       initWeapons();
       setCrosshairVisible(true);
       setStatus(CONTROLS_LINE);
@@ -246,7 +250,7 @@ function updateThirdPersonCamera(feet, cameraYaw, pitch, delta) {
   cameraHorizBack.set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
 
   const targetDist = scoping ? SCOPE_DISTANCE : CAMERA_DISTANCE;
-  const targetFov = scoping ? SCOPE_FOV : CAMERA_FOV;
+  const targetFov = scoping ? (weapons?.getScopeFov?.(CAMERA_FOV) ?? CAMERA_FOV) : CAMERA_FOV;
   cameraFov += (targetFov - cameraFov) * Math.min(1, delta * 12);
   camera.fov = cameraFov;
   camera.updateProjectionMatrix();

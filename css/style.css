@@ -31,20 +31,30 @@ canvas {
 
 #weapon-hud {
   position: absolute;
-  top: 12px;
-  right: 14px;
-  padding: 0.3rem 0.65rem;
-  border: 1px solid #000;
-  background: #000;
-  color: #fff;
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
+  top: 10px;
+  right: 12px;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: none;
+  background-color: transparent;
+  background-image: url('../assets/weapon-icons.png');
+  background-repeat: no-repeat;
+  /* sheet is 8×6 cells */
+  background-size: 800% 600%;
+  image-rendering: auto;
 }
+
+#weapon-hud[data-weapon="melee"] { background-position: calc(3 * 100% / 7) calc(0 * 100% / 5); }
+#weapon-hud[data-weapon="grenade"] { background-position: calc(5 * 100% / 7) calc(1 * 100% / 5); }
+#weapon-hud[data-weapon="machinegun"] { background-position: calc(1 * 100% / 7) calc(3 * 100% / 5); }
+#weapon-hud[data-weapon="sniper"] { background-position: calc(6 * 100% / 7) calc(3 * 100% / 5); }
+#weapon-hud[data-weapon="flamethrower"] { background-position: calc(4 * 100% / 7) calc(3 * 100% / 5); }
 
 #ammo-hud {
   position: absolute;
-  top: 42px;
-  right: 14px;
+  top: 88px;
+  right: 12px;
   padding: 0.3rem 0.65rem;
   border: 1px solid #000;
   background: #000;

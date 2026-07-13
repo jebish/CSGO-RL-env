@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { WeaponAudio } from './weapon-audio.js';
-import { ImpactSystem } from './impacts.js';
+import { WeaponAudio } from './weapon-audio.js?v=6';
+import { ImpactSystem } from './impacts.js?v=5';
 
-const WEAPON_IDS = ['gun', 'flamethrower', 'melee'];
+const WEAPON_IDS = ['machinegun', 'sniper', 'flamethrower', 'grenade', 'melee'];
 const WEAPON_LABELS = {
-  gun: 'PU-21',
+  machinegun: 'PU-21',
+  sniper: 'Bolt Rifle',
   flamethrower: 'Flamethrower',
+  grenade: 'Stick Grenade',
   melee: 'Pipe Wrench',
 };
 
@@ -15,35 +17,49 @@ const FLAME_RANGE = 5.2;
 const FLAME_HALF_ANGLE = THREE.MathUtils.degToRad(18);
 const FLAME_PARTICLES = 220;
 
-const GUN_FIRE_INTERVAL = 1 / 8; // 8 rounds per second
-const GUN_RECOIL_MOVING_DEG = 6;
-const GUN_RECOIL_SCOPED_DEG = 4; // between stationary and moving (placeholder)
-const GUN_RECOIL_STILL_DEG = 3;
+const MACHINEGUN_FIRE_INTERVAL = 1 / 8;
+const SNIPER_FIRE_INTERVAL = 2;
+const GRENADE_THROW_INTERVAL = 2;
+const GRENADE_FUSE = 2.5;
+const GRENADE_THROW_SPEED = 14;
+const GRENADE_GRAVITY = 18;
+
+const MACHINEGUN_RECOIL_MOVING_DEG = 6;
+const MACHINEGUN_RECOIL_SCOPED_DEG = 4;
+const MACHINEGUN_RECOIL_STILL_DEG = 3;
+const SNIPER_RECOIL_SCOPED_DEG = 5;
+/** Hip FOV / scope FOV ≈ zoom. Sniper zoom = 2.5× machinegun zoom. */
+const MACHINEGUN_SCOPE_FOV = 48;
+const SNIPER_SCOPE_FOV = MACHINEGUN_SCOPE_FOV / 2.5;
 const FLAME_USE_PER_SEC = 30;
 /** View-left shoulder origin (screen-left), fire toward crosshair aim point. */
 const FIRE_SHOULDER_Y = 1.18;
 const FIRE_SHOULDER_FORWARD = 0.28;
 const FIRE_VIEW_LEFT = 0.28;
 const FIRE_AIM_POINT_DIST = 80;
-const GUN_TRACER_LENGTH = 16;
+const TRACER_LENGTH = 16;
 
 const AMMO_CONFIG = {
-  gun: { magSize: 80, reserve: 1000, reloadTime: 2 },
+  machinegun: { magSize: 80, reserve: 1000, reloadTime: 2 },
+  sniper: { magSize: 5, reserve: 40, reloadTime: 2.5 },
   flamethrower: { magSize: 200, reserve: 2500, reloadTime: 4 },
+  grenade: { magSize: 3, reserve: 12, reloadTime: 1.5 },
   melee: { infinite: true },
 };
 
 /** Per-weapon capability flags. */
 const WEAPON_FLAGS = {
-  gun: { canScope: true },
-  flamethrower: { canScope: false },
-  melee: { canScope: false },
+  machinegun: { canScope: true, requireScopeToFire: false },
+  sniper: { canScope: true, requireScopeToFire: true },
+  flamethrower: { canScope: false, requireScopeToFire: false },
+  grenade: { canScope: false, requireScopeToFire: false },
+  melee: { canScope: false, requireScopeToFire: false },
 };
 
 const INFINITY = '∞';
 
 /** Attachment / alt-part name fragments to strip from the PU-21 kit. */
-const GUN_DROP_NAME_PARTS = [
+const MACHINEGUN_DROP_NAME_PARTS = [
   'barrel_alt',
   'grip_main_quick',
   'grip_main_sprint',
@@ -75,7 +91,7 @@ function fitWeaponModel(model, targetLength) {
   });
 }
 
-function stripGunAttachments(root) {
+function stripMachinegunAttachments(root) {
   root.traverse((child) => {
     const name = (child.name || '').toLowerCase();
     const meshName = (child.isMesh && child.geometry ? (child.name || '') : child.name || '').toLowerCase();
@@ -86,7 +102,7 @@ function stripGunAttachments(root) {
       matName = mats.map((m) => (m && m.name) || '').join(' ').toLowerCase();
     }
     const hay = `${name} ${meshName} ${matName}`;
-    if (GUN_DROP_NAME_PARTS.some((p) => hay.includes(p))) {
+    if (MACHINEGUN_DROP_NAME_PARTS.some((p) => hay.includes(p))) {
       child.visible = false;
     }
   });
@@ -266,20 +282,29 @@ export class WeaponSystem {
     this.lmbHeld = false;
     this.swingT = 0;
     this.swinging = false;
-    this.gunCooldown = 0;
+    this.actionCooldown = 0;
     this.muzzleFlashT = 0;
     this._playerRef = null;
-    this.gunLoaded = false;
-    this.gunLoading = false;
+    this.machinegunLoaded = false;
+    this.machinegunLoading = false;
+    this.sniperLoaded = false;
+    this.sniperLoading = false;
+    this.grenadeLoaded = false;
+    this.grenadeLoading = false;
     this.reloading = null;
     this.reloadTimer = 0;
     this._cameraPos = null;
     this._aimDirRef = null;
     this.scoping = false;
+    this.liveGrenades = [];
+    this._grenadeVel = new THREE.Vector3();
+    this._grenadeNext = new THREE.Vector3();
 
     this.ammo = {
-      gun: { mag: AMMO_CONFIG.gun.magSize, reserve: AMMO_CONFIG.gun.reserve },
+      machinegun: { mag: AMMO_CONFIG.machinegun.magSize, reserve: AMMO_CONFIG.machinegun.reserve },
+      sniper: { mag: AMMO_CONFIG.sniper.magSize, reserve: AMMO_CONFIG.sniper.reserve },
       flamethrower: { mag: AMMO_CONFIG.flamethrower.magSize, reserve: AMMO_CONFIG.flamethrower.reserve },
+      grenade: { mag: AMMO_CONFIG.grenade.magSize, reserve: AMMO_CONFIG.grenade.reserve },
     };
 
     this.root = new THREE.Group();
@@ -287,8 +312,10 @@ export class WeaponSystem {
     character.add(this.root);
 
     this.slots = {
-      gun: new THREE.Group(),
+      machinegun: new THREE.Group(),
+      sniper: new THREE.Group(),
       flamethrower: new THREE.Group(),
+      grenade: new THREE.Group(),
       melee: new THREE.Group(),
     };
     for (const id of WEAPON_IDS) {
@@ -341,14 +368,14 @@ export class WeaponSystem {
 
   _loadModels() {
     const loader = new GLTFLoader();
-    let pending = 2;
+    let pending = 3;
     const done = () => {
       pending -= 1;
       if (pending <= 0) {
         this.ready = true;
         this._applyVisibility();
-        // Load the heavy gun model after lighter weapons so map boot isn't blocked.
-        this._loadGunModel();
+        this._loadMachinegunModel();
+        this._loadSniperModel();
       }
     };
 
@@ -375,36 +402,78 @@ export class WeaponSystem {
       this.meleeModel = this.slots.melee;
       done();
     }, undefined, done);
+
+    loader.load('assets/grenade.glb', (gltf) => {
+      const model = gltf.scene;
+      fitWeaponModel(model, 0.28);
+      model.rotation.set(0.2, Math.PI / 2, 0.1);
+      model.position.set(0.08, 0.02, 0);
+      this.slots.grenade.add(model);
+      this.grenadePrototype = model;
+      this.grenadeLoaded = true;
+      done();
+    }, undefined, done);
   }
 
-  _loadGunModel() {
-    if (this.gunLoaded || this.gunLoading) return;
-    this.gunLoading = true;
+  _loadMachinegunModel() {
+    if (this.machinegunLoaded || this.machinegunLoading) return;
+    this.machinegunLoading = true;
 
     const loader = new GLTFLoader();
     loader.load(
-      'assets/gun.glb',
+      'assets/machinegun.glb',
       (gltf) => {
         const model = gltf.scene;
-        stripGunAttachments(model);
+        stripMachinegunAttachments(model);
         fitWeaponModel(model, 0.95);
         model.rotation.set(0.05, Math.PI / 2, 0);
         model.position.set(0.08, 0.02, 0);
-        this.slots.gun.add(model);
+        this.slots.machinegun.add(model);
 
         const muzzle = new THREE.Object3D();
         muzzle.position.set(0.48, 0.06, 0);
-        this.slots.gun.add(muzzle);
-        this.gunMuzzle = muzzle;
+        this.slots.machinegun.add(muzzle);
+        this.machinegunMuzzle = muzzle;
 
-        this.gunLoaded = true;
-        this.gunLoading = false;
+        this.machinegunLoaded = true;
+        this.machinegunLoading = false;
         this._applyVisibility();
       },
       undefined,
       (error) => {
-        console.error('Failed to load gun model', error);
-        this.gunLoading = false;
+        console.error('Failed to load machinegun model', error);
+        this.machinegunLoading = false;
+      },
+    );
+  }
+
+  _loadSniperModel() {
+    if (this.sniperLoaded || this.sniperLoading) return;
+    this.sniperLoading = true;
+
+    const loader = new GLTFLoader();
+    loader.load(
+      'assets/sniper.glb',
+      (gltf) => {
+        const model = gltf.scene;
+        fitWeaponModel(model, 1.15);
+        model.rotation.set(0.05, Math.PI / 2, 0);
+        model.position.set(0.1, 0.02, 0);
+        this.slots.sniper.add(model);
+
+        const muzzle = new THREE.Object3D();
+        muzzle.position.set(0.58, 0.05, 0);
+        this.slots.sniper.add(muzzle);
+        this.sniperMuzzle = muzzle;
+
+        this.sniperLoaded = true;
+        this.sniperLoading = false;
+        this._applyVisibility();
+      },
+      undefined,
+      (error) => {
+        console.error('Failed to load sniper model', error);
+        this.sniperLoading = false;
       },
     );
   }
@@ -414,7 +483,17 @@ export class WeaponSystem {
   }
 
   async initAudio() {
-    await this.audio.init();
+    try {
+      await this.audio.init();
+    } catch (err) {
+      console.error('Weapon audio init failed', err);
+    }
+  }
+
+  _ensureAudio() {
+    if (!this.audio?.ready) {
+      void this.initAudio();
+    }
   }
 
   get currentId() {
@@ -427,6 +506,17 @@ export class WeaponSystem {
 
   canScope(weaponId = this.currentId) {
     return !!WEAPON_FLAGS[weaponId]?.canScope;
+  }
+
+  /** Absolute camera FOV while scoped for the current (or given) weapon. */
+  getScopeFov(hipFov = 70, weaponId = this.currentId) {
+    if (weaponId === 'sniper') return SNIPER_SCOPE_FOV;
+    if (weaponId === 'machinegun') return MACHINEGUN_SCOPE_FOV;
+    return hipFov;
+  }
+
+  requiresScopeToFire(weaponId = this.currentId) {
+    return !!WEAPON_FLAGS[weaponId]?.requireScopeToFire;
   }
 
   setScoping(active) {
@@ -500,12 +590,12 @@ export class WeaponSystem {
     return this.ammo[weaponId].mag > 0;
   }
 
-  _consumeGunRound() {
-    const state = this.ammo.gun;
-    if (state.mag <= 0) return false;
+  _consumeRound(weaponId) {
+    const state = this.ammo[weaponId];
+    if (!state || state.mag <= 0) return false;
     state.mag -= 1;
     this._notifyAmmo();
-    if (state.mag <= 0) this._startReload('gun', true);
+    if (state.mag <= 0) this._startReload(weaponId, true);
     return true;
   }
 
@@ -530,7 +620,7 @@ export class WeaponSystem {
 
     this.reloading = weaponId;
     this.reloadTimer = cfg.reloadTime;
-    if (!auto && this.onWeaponChange) this.onWeaponChange(`${WEAPON_LABELS[weaponId]} · reloading`);
+    if (!auto && this.onWeaponChange) this.onWeaponChange(this.currentId);
     this._notifyAmmo();
     return true;
   }
@@ -548,7 +638,7 @@ export class WeaponSystem {
 
     this.reloading = null;
     this.reloadTimer = 0;
-    if (this.onWeaponChange) this.onWeaponChange(this.currentLabel);
+    if (this.onWeaponChange) this.onWeaponChange(this.currentId);
     this._notifyAmmo();
   }
 
@@ -580,9 +670,10 @@ export class WeaponSystem {
       this._flameWasFiring = false;
     }
     if (!this.canScope()) this.scoping = false;
-    if (this.currentId === 'gun') this._loadGunModel();
+    if (this.currentId === 'machinegun') this._loadMachinegunModel();
+    if (this.currentId === 'sniper') this._loadSniperModel();
     this._applyVisibility();
-    if (this.onWeaponChange) this.onWeaponChange(this.currentLabel);
+    if (this.onWeaponChange) this.onWeaponChange(this.currentId);
     this._notifyAmmo();
   }
 
@@ -608,7 +699,9 @@ export class WeaponSystem {
     if (event.button !== 0 || !this._pointerLocked()) return;
     this.lmbHeld = true;
     if (this.currentId === 'melee') this._startSwing();
-    if (this.currentId === 'gun') this._fireGun(this._playerRef, this._cameraPos);
+    if (this.currentId === 'machinegun') this._fireMachinegun(this._playerRef, this._cameraPos);
+    if (this.currentId === 'sniper') this._fireSniper(this._playerRef, this._cameraPos);
+    if (this.currentId === 'grenade') this._throwGrenade(this._playerRef, this._cameraPos);
   }
 
   _onUp(event) {
@@ -620,70 +713,281 @@ export class WeaponSystem {
     if (this.swinging) return;
     this.swinging = true;
     this.swingT = 0;
-    this.audio.playMeleeSwing();
+    this._ensureAudio();
+    if (typeof this.audio.playMeleeSwing === 'function') this.audio.playMeleeSwing();
   }
 
-  _applyGunRecoil(player) {
+  _applyBallisticRecoil(player, { movingDeg, scopedDeg, stillDeg, scopedOnly = false }) {
     if (!player) return;
-    let coneDeg = GUN_RECOIL_STILL_DEG;
-    if (this.scoping && this.canScope('gun')) {
-      coneDeg = GUN_RECOIL_SCOPED_DEG;
-    } else if (player.isMoving()) {
-      coneDeg = GUN_RECOIL_MOVING_DEG;
+    let coneDeg = stillDeg;
+    if (this.scoping && this.canScope()) {
+      coneDeg = scopedDeg;
+    } else if (!scopedOnly && player.isMoving()) {
+      coneDeg = movingDeg;
     }
     const half = THREE.MathUtils.degToRad(coneDeg * 0.5);
-    // Random kick inside a circular FOV cone (horizontal + vertical)
     const r = Math.sqrt(Math.random()) * half;
     const theta = Math.random() * Math.PI * 2;
-    const yawKick = Math.cos(theta) * r;
-    const pitchKick = Math.sin(theta) * r;
-    player.applyRecoil(yawKick, pitchKick);
+    player.applyRecoil(Math.cos(theta) * r, Math.sin(theta) * r);
   }
 
-  _fireGun(player, cameraPos) {
-    if (!this.gunLoaded) {
-      this._loadGunModel();
+  _spawnTracer(from, to, life = 0.06) {
+    const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
+    geo.rotateX(Math.PI / 2);
+    const mesh = new THREE.Mesh(geo, this._tracerMat);
+    const mid = from.clone().lerp(to, 0.5);
+    mesh.position.copy(mid);
+    mesh.scale.z = Math.max(0.01, from.distanceTo(to));
+    mesh.lookAt(to);
+    this.scene.add(mesh);
+    this.tracers.push({ mesh, life });
+  }
+
+  _fireBallistic(player, cameraPos, {
+    weaponId,
+    loaded,
+    ensureLoaded,
+    interval,
+    recoil,
+    playShot,
+    requireScope = false,
+  }) {
+    if (!loaded) {
+      ensureLoaded();
       return;
     }
-    if (this.reloading === 'gun') return;
-    if (this.gunCooldown > 0) return;
-    if (!this._canUseAmmo('gun')) {
-      this._startReload('gun', true);
+    if (requireScope && !this.scoping) return;
+    if (this.reloading === weaponId) return;
+    if (this.actionCooldown > 0) return;
+    if (!this._canUseAmmo(weaponId)) {
+      this._startReload(weaponId, true);
       return;
     }
 
-    this.gunCooldown = GUN_FIRE_INTERVAL;
-    this.muzzleFlashT = 0.05;
-    this._applyGunRecoil(player);
-    if (!this._consumeGunRound()) return;
+    this.actionCooldown = interval;
+    this.muzzleFlashT = weaponId === 'sniper' ? 0.09 : 0.05;
+    this._applyBallisticRecoil(player, recoil);
+    if (!this._consumeRound(weaponId)) return;
 
-    // After recoil, rebuild chest→crosshair using the updated look angles.
-    const aim = player
-      ? player.getAimDirection(this._traceDir)
-      : this._aimDirRef;
+    const aim = player ? player.getAimDirection(this._traceDir) : this._aimDirRef;
     this._computeFireToCrosshair(cameraPos || this._cameraPos, aim, player);
-    this.audio.playGunShot();
+    this._ensureAudio();
+    try {
+      playShot();
+    } catch (err) {
+      console.error(err);
+    }
 
     const hitPoint = this.impacts.raycastBullet(
       this._muzzleWorld,
       this._forward,
       FIRE_AIM_POINT_DIST,
     );
-    if (hitPoint) {
-      this._aimEnd.copy(hitPoint);
-    } else {
-      this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, GUN_TRACER_LENGTH);
+    if (hitPoint) this._aimEnd.copy(hitPoint);
+    else this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, TRACER_LENGTH);
+    this._spawnTracer(this._muzzleWorld, this._aimEnd, weaponId === 'sniper' ? 0.1 : 0.06);
+  }
+
+  _fireMachinegun(player, cameraPos) {
+    this._fireBallistic(player, cameraPos, {
+      weaponId: 'machinegun',
+      loaded: this.machinegunLoaded,
+      ensureLoaded: () => this._loadMachinegunModel(),
+      interval: MACHINEGUN_FIRE_INTERVAL,
+      recoil: {
+        movingDeg: MACHINEGUN_RECOIL_MOVING_DEG,
+        scopedDeg: MACHINEGUN_RECOIL_SCOPED_DEG,
+        stillDeg: MACHINEGUN_RECOIL_STILL_DEG,
+      },
+      playShot: () => this.audio.playMachinegunShot(),
+    });
+  }
+
+  _fireSniper(player, cameraPos) {
+    this._fireBallistic(player, cameraPos, {
+      weaponId: 'sniper',
+      loaded: this.sniperLoaded,
+      ensureLoaded: () => this._loadSniperModel(),
+      interval: SNIPER_FIRE_INTERVAL,
+      requireScope: true,
+      recoil: {
+        movingDeg: SNIPER_RECOIL_SCOPED_DEG,
+        scopedDeg: SNIPER_RECOIL_SCOPED_DEG,
+        stillDeg: SNIPER_RECOIL_SCOPED_DEG,
+        scopedOnly: true,
+      },
+      playShot: () => this.audio.playSniperShot(),
+    });
+  }
+
+  _throwGrenade(player, cameraPos) {
+    if (!this.grenadeLoaded) return;
+    if (this.reloading === 'grenade') return;
+    if (this.actionCooldown > 0) return;
+    if (!this._canUseAmmo('grenade')) {
+      this._startReload('grenade', true);
+      return;
     }
 
-    const geo = new THREE.CylinderGeometry(0.01, 0.01, 1, 5);
-    geo.rotateX(Math.PI / 2);
-    const mesh = new THREE.Mesh(geo, this._tracerMat);
-    const mid = this._muzzleWorld.clone().lerp(this._aimEnd, 0.5);
-    mesh.position.copy(mid);
-    mesh.scale.z = this._muzzleWorld.distanceTo(this._aimEnd);
-    mesh.lookAt(this._aimEnd);
-    this.scene.add(mesh);
-    this.tracers.push({ mesh, life: 0.06 });
+    this.actionCooldown = GRENADE_THROW_INTERVAL;
+    if (!this._consumeRound('grenade')) return;
+    this._ensureAudio();
+
+    const aim = player ? player.getAimDirection(this._traceDir) : this._aimDirRef;
+    this._computeFireToCrosshair(cameraPos || this._cameraPos, aim, player);
+
+    const root = new THREE.Group();
+    if (this.grenadePrototype) {
+      const body = this.grenadePrototype.clone(true);
+      body.position.set(0, 0, 0);
+      body.rotation.set(0, 0, 0);
+      body.scale.multiplyScalar(1.05);
+      root.add(body);
+    } else {
+      root.add(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.028, 0.032, 0.16, 10),
+        new THREE.MeshStandardMaterial({ color: 0x3f4f32, metalness: 0.45, roughness: 0.5 }),
+      ));
+    }
+
+    // Lit fuse tip + spark emitter (small — stick grenade, not a torch)
+    const fuseTip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffaa33 }),
+    );
+    fuseTip.position.set(0, 0.14, 0);
+    root.add(fuseTip);
+
+    const fuseLight = new THREE.PointLight(0xff6622, 0.7, 1.6, 2);
+    fuseLight.position.copy(fuseTip.position);
+    root.add(fuseLight);
+
+    const sparkGeo = new THREE.BufferGeometry();
+    const sparkCount = 12;
+    const sparkPos = new Float32Array(sparkCount * 3);
+    sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+    const sparks = new THREE.Points(
+      sparkGeo,
+      new THREE.PointsMaterial({
+        color: 0xffcc66,
+        size: 0.028,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    sparks.frustumCulled = false;
+    root.add(sparks);
+
+    root.traverse((c) => {
+      if (c.isMesh) {
+        c.castShadow = true;
+        c.receiveShadow = true;
+      }
+    });
+    root.position.copy(this._muzzleWorld);
+    this.scene.add(root);
+
+    const vel = this._forward.clone().multiplyScalar(GRENADE_THROW_SPEED);
+    vel.y += 3.5;
+
+    this.liveGrenades.push({
+      mesh: root,
+      vel,
+      fuse: GRENADE_FUSE,
+      settled: false,
+      fuseTip,
+      fuseLight,
+      sparks,
+      sparkPos,
+      sparkAge: new Float32Array(sparkCount),
+    });
+  }
+
+  _updateGrenades(delta) {
+    for (let i = this.liveGrenades.length - 1; i >= 0; i -= 1) {
+      const g = this.liveGrenades[i];
+      g.fuse -= delta;
+
+      // Animate fuse sparks around the tip
+      if (g.sparks && g.sparkPos) {
+        const arr = g.sparkPos;
+        const n = arr.length / 3;
+        for (let s = 0; s < n; s += 1) {
+          g.sparkAge[s] = (g.sparkAge[s] || Math.random()) + delta * (2.5 + Math.random() * 2);
+          if (g.sparkAge[s] > 1) g.sparkAge[s] -= 1;
+          const t = g.sparkAge[s];
+          const a = s * 1.7 + t * 8;
+          arr[s * 3] = Math.cos(a) * 0.02 * t;
+          arr[s * 3 + 1] = 0.14 + t * 0.06;
+          arr[s * 3 + 2] = Math.sin(a) * 0.02 * t;
+        }
+        g.sparks.geometry.attributes.position.needsUpdate = true;
+        g.fuseLight.intensity = 0.45 + Math.random() * 0.45;
+        g.fuseTip.material.color.setHex(Math.random() > 0.5 ? 0xffaa33 : 0xff6622);
+      }
+
+      if (!g.settled) {
+        g.vel.y -= GRENADE_GRAVITY * delta;
+        this._grenadeNext.copy(g.mesh.position).addScaledVector(g.vel, delta);
+
+        const speed = g.vel.length();
+        let hitPoint = null;
+        if (speed > 1e-4 && this.impacts.meshes.length) {
+          this._traceDir.copy(g.vel).normalize();
+          const dist = Math.max(0.05, g.mesh.position.distanceTo(this._grenadeNext) + 0.05);
+          this.impacts.raycaster.set(g.mesh.position, this._traceDir);
+          this.impacts.raycaster.far = dist;
+          const hits = this.impacts.raycaster.intersectObjects(this.impacts.meshes, false);
+          hitPoint = hits[0] || null;
+        }
+
+        if (hitPoint) {
+          const n = hitPoint.face
+            ? hitPoint.face.normal.clone().transformDirection(hitPoint.object.matrixWorld).normalize()
+            : new THREE.Vector3(0, 1, 0);
+          g.mesh.position.copy(hitPoint.point).addScaledVector(n, 0.06);
+          const impactSpeed = g.vel.length();
+          if (n.y > 0.55 || impactSpeed < 3.5) {
+            g.vel.set(0, 0, 0);
+            g.settled = true;
+          } else {
+            const vn = n.clone().multiplyScalar(g.vel.dot(n));
+            g.vel.sub(vn).addScaledVector(n, -vn.length() * 0.25);
+            g.vel.multiplyScalar(0.55);
+          }
+        } else {
+          g.mesh.position.copy(this._grenadeNext);
+        }
+        g.mesh.rotation.x += delta * 8;
+        g.mesh.rotation.z += delta * 5;
+      }
+
+      if (g.fuse <= 0) {
+        try {
+          this._ensureAudio();
+          if (typeof this.audio.playExplosion === 'function') {
+            this.audio.playExplosion();
+          }
+        } catch (err) {
+          console.error(err);
+        }
+        try {
+          this.impacts.explodeAt(g.mesh.position.clone(), 4.0);
+        } catch (err) {
+          console.error(err);
+        }
+        this.scene.remove(g.mesh);
+        g.mesh.traverse((c) => {
+          if (c.geometry) c.geometry.dispose?.();
+          if (c.material) {
+            if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose?.());
+            else c.material.dispose?.();
+          }
+        });
+        this.liveGrenades.splice(i, 1);
+      }
+    }
   }
 
   update(delta, player, aimDir, cameraPos) {
@@ -695,13 +999,14 @@ export class WeaponSystem {
       if (this.reloadTimer <= 0) this._finishReload();
     }
 
-    this.gunCooldown = Math.max(0, this.gunCooldown - delta);
+    this.actionCooldown = Math.max(0, this.actionCooldown - delta);
     this.muzzleFlashT = Math.max(0, this.muzzleFlashT - delta);
 
     this._aimDirRef = aimDir || null;
     this._cameraPos = cameraPos || null;
     this._computeFireToCrosshair(cameraPos, aimDir, player);
-    this.impacts.update();
+    this.impacts.update(performance.now() * 0.001, delta);
+    this._updateGrenades(delta);
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
@@ -713,8 +1018,8 @@ export class WeaponSystem {
       }
     }
 
-    if (this.currentId === 'gun' && this.lmbHeld && this._pointerLocked() && !this.reloading) {
-      this._fireGun(player, cameraPos);
+    if (this.currentId === 'machinegun' && this.lmbHeld && this._pointerLocked() && !this.reloading) {
+      this._fireMachinegun(player, cameraPos);
     }
 
     if (this.currentId === 'flamethrower') {
@@ -734,6 +1039,7 @@ export class WeaponSystem {
       }
 
       if (firing !== this._flameWasFiring) {
+        this._ensureAudio();
         this.audio.setFlamethrowerFiring(firing);
         this._flameWasFiring = firing;
       }
@@ -746,9 +1052,9 @@ export class WeaponSystem {
         this.audio.setFlamethrowerFiring(false);
         this._flameWasFiring = false;
       }
-      if (this.currentId === 'gun') {
+      if (this.currentId === 'machinegun' || this.currentId === 'sniper') {
         this.flame.setFiring(false);
-        this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffcc66, 3.5);
+        this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffcc66, this.currentId === 'sniper' ? 5 : 3.5);
       } else {
         this.flame.setFiring(false);
         this._updateMuzzleLight(false, 0xffcc66, 0);
