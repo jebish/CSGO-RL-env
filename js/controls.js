@@ -92,6 +92,20 @@ export class PlayerController {
     return this.timeSinceMouseMove >= MOUSE_IDLE_THRESHOLD;
   }
 
+  isMoving() {
+    return this.moveInput.forward !== 0 || this.moveInput.right !== 0;
+  }
+
+  applyRecoil(yawRad, pitchRad) {
+    this.cameraYaw += yawRad;
+    this.cameraPitch += pitchRad;
+    const limit = Math.PI / 2 - 0.05;
+    if (this.cameraPitch > limit) this.cameraPitch = limit;
+    if (this.cameraPitch < -limit) this.cameraPitch = -limit;
+    this.characterYaw = this.cameraYaw;
+    this.timeSinceMouseMove = 0;
+  }
+
   setPosition(x, y, z) {
     this.position.set(x, y, z);
     this.velocityY = 0;

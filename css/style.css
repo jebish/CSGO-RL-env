@@ -21,6 +21,18 @@ body {
   z-index: 10;
 }
 
+#weapon-hud {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid #000;
+  background: #000;
+  color: #fff;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
 #minimap-wrap {
   position: fixed;
   left: 10px;

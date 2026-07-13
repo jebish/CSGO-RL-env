@@ -5,6 +5,7 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js';
+import { WeaponSystem } from './weapons.js';
 
 const hud = document.getElementById('hud');
 const minimapWrap = document.getElementById('minimap-wrap');
@@ -15,9 +16,10 @@ const panelTitle = document.getElementById('panel-title');
 const panelBody = document.getElementById('panel-body');
 const panelClose = document.getElementById('panel-close');
 const footerText = document.getElementById('footer-text');
+const weaponHud = document.getElementById('weapon-hud');
 
 const CONTROLS_LINE =
-  'WASD move · Space jump · Shift sprint · Mouse look · E interact · Click game to capture mouse · Esc release';
+  'WASD move · Space jump · Shift sprint · Mouse look · Scroll weapons · LMB fire/swing · E interact · Click game to capture mouse · Esc release';
 
 const CHARACTER_MODEL_YAW = -Math.PI / 2;
 const CHARACTER_WIDTH_SCALE = 0.93;
@@ -70,6 +72,7 @@ let mapRoot = new THREE.Group();
 let collisionWorld = null;
 let player = null;
 let interactables = null;
+let weapons = null;
 let mapLoaded = false;
 let characterReady = false;
 const clock = new THREE.Clock();
@@ -96,6 +99,11 @@ loader.load('assets/character.glb', (gltf) => {
   fitCharacterModel(model);
   character.add(model);
   characterReady = true;
+  weapons = new WeaponSystem(scene, character, renderer.domElement);
+  weapons.onWeaponChange = (label) => {
+    if (weaponHud) weaponHud.textContent = label;
+  };
+  if (weaponHud) weaponHud.textContent = weapons.currentLabel;
 });
 
 loader.load(
@@ -227,6 +235,10 @@ function animate() {
     character.position.copy(feet);
     character.rotation.y = player.characterYaw;
     character.visible = characterReady;
+
+    if (weapons) {
+      weapons.update(delta, player.characterYaw);
+    }
 
     updateThirdPersonCamera(feet, player.cameraYaw, player.cameraPitch);
 
