@@ -57,6 +57,11 @@ export class PlayerController {
 
   _onPointerLockChange() {
     this.pointerLocked = document.pointerLockElement === this.domElement;
+    if (!this.pointerLocked) {
+      this.keys.clear();
+      this.moveInput.forward = 0;
+      this.moveInput.right = 0;
+    }
   }
 
   _onKeyDown(event) {

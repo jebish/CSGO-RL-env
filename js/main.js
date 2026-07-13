@@ -38,14 +38,17 @@ window.addEventListener('unhandledrejection', (event) => {
 setStatus('Starting engine…');
 
 const CONTROLS_LINE =
-  'WASD move · Space jump · Shift sprint · Mouse look · Scroll weapons · LMB fire/swing · R reload · E interact · Click game to capture mouse · Esc release';
+  'WASD move · Space jump · Shift sprint · Mouse look · Scroll weapons · LMB fire/swing · RMB scope · R reload · E interact · Click game to capture mouse · Esc release';
 
 const CHARACTER_MODEL_YAW = -Math.PI / 2;
 const CHARACTER_WIDTH_SCALE = 0.93;
-const CAMERA_DISTANCE = 1.58;
-const CAMERA_SHOULDER_Y = 1.05;
-const CAMERA_LIFT = 0.2;
-const AIM_LOOK_DISTANCE = 40;
+const CAMERA_DISTANCE = 1.28;
+const CAMERA_HEAD_Y = 1.22;
+const CAMERA_LIFT = 0.12;
+const AIM_LOOK_DISTANCE = 48;
+const CAMERA_FOV = 70;
+const SCOPE_FOV = 36;
+const SCOPE_DISTANCE = 0.42;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -59,8 +62,10 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
+const camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.05, 500);
 camera.rotation.order = 'YXZ';
+let cameraFov = CAMERA_FOV;
+let scoping = false;
 
 const hemi = new THREE.HemisphereLight(0xb8c9dc, 0x5a6348, 0.35);
 scene.add(hemi);
@@ -125,6 +130,7 @@ function initWeapons() {
   weapons = new WeaponSystem(scene, character, renderer.domElement);
   weapons.onWeaponChange = (label) => {
     if (weaponHud) weaponHud.textContent = label;
+    if (!weapons.canScope()) setScoping(false);
   };
   weapons.onAmmoChange = (text) => {
     if (ammoHud) ammoHud.textContent = text;
@@ -224,7 +230,7 @@ mapLoader.load(
   },
 );
 
-function updateThirdPersonCamera(feet, cameraYaw, pitch) {
+function updateThirdPersonCamera(feet, cameraYaw, pitch, delta) {
   const cosPitch = Math.cos(pitch);
   cameraAimDir.set(
     Math.sin(cameraYaw) * cosPitch,
@@ -232,17 +238,31 @@ function updateThirdPersonCamera(feet, cameraYaw, pitch) {
     Math.cos(cameraYaw) * cosPitch,
   );
 
-  cameraPivot.set(feet.x, feet.y + CAMERA_SHOULDER_Y, feet.z);
-
+  // Pivot near head so the view clears the ground and the body sits lower in frame.
+  cameraPivot.set(feet.x, feet.y + CAMERA_HEAD_Y, feet.z);
   cameraHorizBack.set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+
+  const targetDist = scoping ? SCOPE_DISTANCE : CAMERA_DISTANCE;
+  const targetFov = scoping ? SCOPE_FOV : CAMERA_FOV;
+  cameraFov += (targetFov - cameraFov) * Math.min(1, delta * 12);
+  camera.fov = cameraFov;
+  camera.updateProjectionMatrix();
 
   camera.position
     .copy(cameraPivot)
-    .addScaledVector(cameraHorizBack, CAMERA_DISTANCE);
+    .addScaledVector(cameraHorizBack, targetDist);
   camera.position.y += CAMERA_LIFT;
 
-  cameraLookTarget.copy(camera.position).addScaledVector(cameraAimDir, AIM_LOOK_DISTANCE);
+  // Look along aim from a point slightly ahead of the head so the crosshair clears the helmet.
+  cameraLookTarget
+    .copy(cameraPivot)
+    .addScaledVector(cameraAimDir, 0.55)
+    .addScaledVector(cameraAimDir, AIM_LOOK_DISTANCE);
   camera.lookAt(cameraLookTarget);
+
+  if (characterReady) {
+    character.visible = !scoping;
+  }
 }
 
 function setCrosshairVisible(visible) {
@@ -267,6 +287,43 @@ renderer.domElement.addEventListener('click', () => {
     weather.startRainAudio();
     player.requestPointerLock();
   }
+});
+
+renderer.domElement.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+});
+
+function setScoping(active) {
+  const allowed = !!weapons?.canScope();
+  scoping = !!active && allowed;
+  if (crosshair) {
+    if (scoping) crosshair.classList.add('scoped');
+    else crosshair.classList.remove('scoped');
+  }
+  if (weapons) weapons.setScoping(scoping);
+  return scoping;
+}
+
+window.addEventListener('mousedown', (event) => {
+  if (event.button === 2 && player?.pointerLocked && panel.hidden) {
+    setScoping(true);
+  }
+});
+
+window.addEventListener('mouseup', (event) => {
+  if (event.button === 2) {
+    setScoping(false);
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== renderer.domElement) {
+    setScoping(false);
+  }
+});
+
+window.addEventListener('blur', () => {
+  setScoping(false);
 });
 
 panelClose.addEventListener('click', hidePanel);
@@ -300,12 +357,12 @@ function animate() {
     const feet = player.getFeetPosition(new THREE.Vector3());
     character.position.copy(feet);
     character.rotation.y = player.characterYaw;
-    character.visible = characterReady;
 
-    updateThirdPersonCamera(feet, player.cameraYaw, player.cameraPitch);
+    updateThirdPersonCamera(feet, player.cameraYaw, player.cameraPitch, delta);
     camera.getWorldDirection(worldAimDir);
 
     if (weapons) {
+      if (scoping && !weapons.canScope()) setScoping(false);
       weapons.update(delta, player, worldAimDir, camera.position);
     }
 

@@ -101,6 +101,21 @@ canvas {
   border-radius: 50%;
 }
 
+#crosshair.scoped {
+  width: 28px;
+  height: 28px;
+}
+
+#crosshair.scoped .ch-top,
+#crosshair.scoped .ch-bottom {
+  height: 9px;
+}
+
+#crosshair.scoped .ch-left,
+#crosshair.scoped .ch-right {
+  width: 9px;
+}
+
 #minimap-wrap {
   position: fixed;
   left: 10px;

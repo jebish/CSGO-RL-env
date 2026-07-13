@@ -15,6 +15,7 @@ const FLAME_PARTICLES = 220;
 
 const GUN_FIRE_INTERVAL = 1 / 8; // 8 rounds per second
 const GUN_RECOIL_MOVING_DEG = 6;
+const GUN_RECOIL_SCOPED_DEG = 4; // between stationary and moving (placeholder)
 const GUN_RECOIL_STILL_DEG = 3;
 const FLAME_USE_PER_SEC = 30;
 
@@ -22,6 +23,13 @@ const AMMO_CONFIG = {
   gun: { magSize: 80, reserve: 1000, reloadTime: 2 },
   flamethrower: { magSize: 200, reserve: 2500, reloadTime: 4 },
   melee: { infinite: true },
+};
+
+/** Per-weapon capability flags. */
+const WEAPON_FLAGS = {
+  gun: { canScope: true },
+  flamethrower: { canScope: false },
+  melee: { canScope: false },
 };
 
 const INFINITY = '∞';
@@ -258,6 +266,7 @@ export class WeaponSystem {
     this.reloading = null;
     this.reloadTimer = 0;
     this._cameraPos = null;
+    this.scoping = false;
 
     this.ammo = {
       gun: { mag: AMMO_CONFIG.gun.magSize, reserve: AMMO_CONFIG.gun.reserve },
@@ -389,6 +398,15 @@ export class WeaponSystem {
     return WEAPON_LABELS[this.currentId];
   }
 
+  canScope(weaponId = this.currentId) {
+    return !!WEAPON_FLAGS[weaponId]?.canScope;
+  }
+
+  setScoping(active) {
+    this.scoping = !!active && this.canScope();
+    return this.scoping;
+  }
+
   getAmmoDisplay(weaponId = this.currentId) {
     const cfg = AMMO_CONFIG[weaponId];
     if (cfg?.infinite) return `${INFINITY}-${INFINITY}`;
@@ -493,6 +511,7 @@ export class WeaponSystem {
     this.swingT = 0;
     this.slots.melee.rotation.set(0, 0, 0);
     this.lmbHeld = this.lmbHeld && this.currentId === 'flamethrower';
+    if (!this.canScope()) this.scoping = false;
     if (this.currentId === 'gun') this._loadGunModel();
     this._applyVisibility();
     if (this.onWeaponChange) this.onWeaponChange(this.currentLabel);
@@ -537,7 +556,12 @@ export class WeaponSystem {
 
   _applyGunRecoil(player) {
     if (!player) return;
-    const coneDeg = player.isMoving() ? GUN_RECOIL_MOVING_DEG : GUN_RECOIL_STILL_DEG;
+    let coneDeg = GUN_RECOIL_STILL_DEG;
+    if (this.scoping && this.canScope('gun')) {
+      coneDeg = GUN_RECOIL_SCOPED_DEG;
+    } else if (player.isMoving()) {
+      coneDeg = GUN_RECOIL_MOVING_DEG;
+    }
     const half = THREE.MathUtils.degToRad(coneDeg * 0.5);
     // Random kick inside a circular FOV cone (horizontal + vertical)
     const r = Math.sqrt(Math.random()) * half;
@@ -669,4 +693,4 @@ export class WeaponSystem {
   }
 }
 
-export { WEAPON_LABELS };
+export { WEAPON_LABELS, WEAPON_FLAGS };

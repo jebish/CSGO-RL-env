@@ -17,6 +17,7 @@ bash start.sh
 - Accurate useful FOV logic
 - Weapons firing audio
 - Game timer and end logic
+- Scope in/out, scope as a variable feature for weapons
 
  # **Tasks (AI/ML)**
  - RL data collector utils
