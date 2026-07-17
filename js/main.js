@@ -117,6 +117,7 @@ const CAMERA_FOV = 70;
 const SCOPE_DISTANCE = 0.42;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.domElement.id = 'game-canvas';
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;

@@ -14,7 +14,8 @@ body {
   color: #fff;
 }
 
-canvas {
+/* WebGL only — do NOT target #minimap-canvas (that was pinning the map to top-left). */
+#game-canvas {
   display: block;
   position: fixed;
   inset: 0;
@@ -181,11 +182,11 @@ canvas {
 }
 
 #minimap-wrap {
-  position: fixed !important;
-  top: auto !important;
-  right: auto !important;
-  left: 12px !important;
-  bottom: 32px !important;
+  position: fixed;
+  left: 12px;
+  bottom: 32px;
+  top: auto;
+  right: auto;
   width: 148px;
   height: 148px;
   z-index: 15;
@@ -194,6 +195,10 @@ canvas {
 
 #minimap-canvas {
   display: block;
+  position: relative;
+  inset: auto;
+  top: auto;
+  left: auto;
   width: 148px;
   height: 148px;
   border-radius: 50%;
