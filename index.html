@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dust2 Explorer</title>
-  <link rel="stylesheet" href="css/style.css?v=9" />
+  <link rel="stylesheet" href="css/style.css?v=10" />
 </head>
 <body>
   <div id="menu-root" class="menu-root menu-open">
@@ -56,15 +56,17 @@
       <span class="ch ch-right"></span>
       <span class="ch ch-dot"></span>
     </div>
-    <div id="minimap-wrap" hidden>
-      <canvas id="minimap-canvas" width="148" height="148"></canvas>
-    </div>
     <div id="prompt" hidden>Press <kbd>E</kbd> to interact</div>
     <div id="panel" hidden>
       <button id="panel-close" type="button" aria-label="Close">×</button>
       <h2 id="panel-title"></h2>
       <p id="panel-body"></p>
     </div>
+  </div>
+
+  <!-- Outside #hud so position:fixed is always viewport bottom-left -->
+  <div id="minimap-wrap" hidden>
+    <canvas id="minimap-canvas" width="148" height="148"></canvas>
   </div>
 
   <footer id="controls-footer">
@@ -79,6 +81,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=9"></script>
+  <script type="module" src="js/main.js?v=10"></script>
 </body>
 </html>

@@ -33,6 +33,22 @@ export class Minimap {
     this._normal = new THREE.Vector3();
     this._origin = new THREE.Vector3();
     this._raycaster = new THREE.Raycaster();
+    this._pinBottomLeft();
+  }
+
+  /** Viewport bottom-left — never top-left with the avatar. */
+  _pinBottomLeft() {
+    if (!this.container) return;
+    const s = this.container.style;
+    s.position = 'fixed';
+    s.left = '12px';
+    s.bottom = '32px';
+    s.top = 'auto';
+    s.right = 'auto';
+    s.width = '148px';
+    s.height = '148px';
+    s.zIndex = '15';
+    s.pointerEvents = 'none';
   }
 
   _isWalkableHit(hit) {
@@ -103,7 +119,9 @@ export class Minimap {
     this.baked = baked;
     this.bounds = { minX, maxX, minZ, maxZ, worldW, worldH };
     this.ready = true;
-    this.container.hidden = false;
+    this._pinBottomLeft();
+    // Stay hidden until gameplay — bake must not park it under the avatar.
+    this.container.hidden = true;
   }
 
   _applyMapTransform(ctx, cx, cy, scale, playerX, playerZ, mapYaw) {

@@ -179,14 +179,14 @@ canvas {
 }
 
 #minimap-wrap {
-  position: absolute;
-  top: auto;
-  right: auto;
-  left: 10px;
-  bottom: 28px;
+  position: fixed !important;
+  top: auto !important;
+  right: auto !important;
+  left: 12px !important;
+  bottom: 32px !important;
   width: 148px;
   height: 148px;
-  z-index: 12;
+  z-index: 15;
   pointer-events: none;
 }
 

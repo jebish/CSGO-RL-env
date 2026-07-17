@@ -4,7 +4,7 @@ import { PlayerController } from './controls.js';
 import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
-import { Minimap, collectMapMeshes } from './minimap.js';
+import { Minimap, collectMapMeshes } from './minimap.js?v=10';
 import { WeaponSystem } from './weapons.js?v=9';
 import { GameMenu } from './ui-menu.js';
 import { NetClient, SPAWN_OFFSETS } from './net.js';
@@ -323,7 +323,10 @@ function enterGameplay(info) {
   }
   net.combat.reset();
   setCrosshairVisible(true);
-  if (minimapWrap) minimapWrap.hidden = false;
+  if (minimapWrap) {
+    minimap._pinBottomLeft();
+    minimapWrap.hidden = false;
+  }
   setStatus(CONTROLS_LINE);
   document.exitPointerLock?.();
 }
