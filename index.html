@@ -7,7 +7,36 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div id="hud">
+  <div id="menu-root" class="menu-root menu-open">
+    <div id="menu-error" class="menu-error" hidden></div>
+    <div id="menu-user" class="menu-user">Checking HF login…</div>
+
+    <section id="menu-start" class="menu-panel">
+      <h1 class="menu-brand">Dust2</h1>
+      <p class="menu-sub">Sandbox · 1v1 · 4v4</p>
+      <div class="menu-actions">
+        <button type="button" id="btn-mode-sandbox" class="menu-btn">Sandbox</button>
+        <button type="button" id="btn-mode-1v1" class="menu-btn">1v1</button>
+        <button type="button" id="btn-mode-4v4" class="menu-btn">4v4</button>
+      </div>
+    </section>
+
+    <section id="menu-lobby" class="menu-panel menu-lobby" hidden>
+      <div class="lobby-toolbar">
+        <button type="button" id="btn-lobby-back" class="menu-btn ghost">Back</button>
+        <h2 id="lobby-title">Lobbies</h2>
+        <div class="lobby-actions">
+          <button type="button" id="btn-lobby-leave" class="menu-btn ghost">Leave seat</button>
+          <button type="button" id="btn-lobby-enter" class="menu-btn">Enter / wait match</button>
+        </div>
+      </div>
+      <p id="lobby-meta" class="lobby-meta"></p>
+      <div id="lobby-list" class="lobby-list"></div>
+    </section>
+  </div>
+
+  <div id="hud" hidden>
+    <div id="hp-hud">100</div>
     <div id="weapon-hud" data-weapon="machinegun" aria-label="weapon"></div>
     <div id="ammo-hud">80-1000</div>
     <div id="crosshair" hidden aria-hidden="true">
@@ -40,6 +69,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=6"></script>
+  <script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

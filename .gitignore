@@ -1,5 +1,7 @@
 .venv/
 temp/
 temp-dont-use-directly/
-
+.env.local
+.env
 ref/
+server/.venv/

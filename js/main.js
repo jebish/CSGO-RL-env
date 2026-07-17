@@ -5,7 +5,9 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js';
-import { WeaponSystem } from './weapons.js?v=6';
+import { WeaponSystem } from './weapons.js?v=7';
+import { GameMenu } from './ui-menu.js';
+import { NetClient, SPAWN_OFFSETS } from './net.js';
 
 const hud = document.getElementById('hud');
 const minimapWrap = document.getElementById('minimap-wrap');
@@ -18,13 +20,17 @@ const panelClose = document.getElementById('panel-close');
 const footerText = document.getElementById('footer-text');
 const weaponHud = document.getElementById('weapon-hud');
 const ammoHud = document.getElementById('ammo-hud');
+const hpHud = document.getElementById('hp-hud');
 const crosshair = document.getElementById('crosshair');
+const menuRoot = document.getElementById('menu-root');
 
 function setStatus(text) {
   if (footerText) footerText.textContent = text;
 }
 
 let bootComplete = false;
+let gameplayActive = false;
+let baseSpawn = new THREE.Vector3();
 
 window.addEventListener('error', (event) => {
   console.error(event.error || event.message);
@@ -113,6 +119,93 @@ const clock = new THREE.Clock();
 const mapLoader = new GLTFLoader();
 const characterLoader = new GLTFLoader();
 
+const net = new NetClient({
+  scene,
+  onStatus: setStatus,
+  onMatchStart: (info) => enterGameplay(info),
+  onMatchEnd: (msg) => {
+    setStatus(`Match over — winner: ${msg.winner || msg.winnerUser || '?'}`);
+  },
+  onLobbyUpdate: (board, mode, error = null) => {
+    menu.renderBoard(board, mode, error);
+  },
+});
+
+net.combat.onHpChange = (hp, alive) => {
+  if (hpHud) hpHud.textContent = alive ? String(Math.ceil(hp)) : 'DEAD';
+};
+
+net.combat.onRespawn = () => {
+  if (!player) return;
+  applySpawn(net._spawnIndex || 0);
+};
+
+net.onRemoteFire = (msg) => {
+  if (!weapons || !msg.origin || !msg.dir) return;
+  const from = new THREE.Vector3(msg.origin[0], msg.origin[1], msg.origin[2]);
+  const dir = new THREE.Vector3(msg.dir[0], msg.dir[1], msg.dir[2]).normalize();
+  const to = from.clone().addScaledVector(dir, 16);
+  weapons._spawnTracer(from, to, msg.weapon === 'sniper' ? 0.1 : 0.06);
+};
+
+net.onRemoteGrenadeThrow = (msg) => {
+  if (weapons && msg.origin && msg.vel) {
+    weapons.spawnRemoteGrenade(msg.origin, msg.vel, msg.fuse);
+  }
+};
+
+net.onRemoteGrenadeExplode = (msg) => {
+  if (!weapons || !msg.pos) return;
+  try {
+    weapons.impacts.explodeAt(new THREE.Vector3(msg.pos[0], msg.pos[1], msg.pos[2]), msg.radius || 4);
+    weapons._ensureAudio?.();
+    weapons.audio?.playExplosion?.();
+  } catch (err) {
+    console.error(err);
+  }
+};
+
+const menu = new GameMenu({
+  root: menuRoot,
+  onOpenMode: (mode) => {
+    net.startLobbyPoll(mode);
+  },
+  onBack: async () => {
+    net.stopLobbyPoll();
+    await net.leaveLobby();
+    exitGameplayToMenu();
+  },
+  onClaim: async (mode, lobbyId, seat) => {
+    const data = await net.claim(mode, lobbyId, seat);
+    setStatus(`Seated ${seat} in ${lobbyId}`);
+    // Connect WS immediately; sandbox starts right away, others wait for fill rules
+    net.connectMatch();
+    return data;
+  },
+  onLeaveSeat: async () => {
+    await net.leaveLobby();
+    setStatus('Left seat');
+  },
+  onEnterMatch: () => {
+    if (!net.lobbyId) {
+      setStatus('Claim a seat first');
+      return;
+    }
+    net.connectMatch();
+  },
+});
+
+async function bootIdentity() {
+  const res = await net.initLocal();
+  menu.setIdentity({
+    username: net.username,
+    spaceUrl: net.spaceUrl,
+    authError: res.ok ? null : res.error,
+  });
+  if (!res.ok) setStatus(res.error);
+  else setStatus(`Online as ${net.username}`);
+}
+
 function fitCharacterModel(model) {
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3());
@@ -133,6 +226,8 @@ function initWeapons() {
   if (weapons || !characterReady || !mapLoaded) return;
   weapons = new WeaponSystem(scene, character, renderer.domElement);
   weapons.setImpactMeshes(mapHitMeshes);
+  weapons.net = net;
+  weapons.paused = true;
   weapons.onWeaponChange = (weaponId) => {
     if (weaponHud) weaponHud.dataset.weapon = weaponId;
     if (!weapons.canScope()) setScoping(false);
@@ -142,6 +237,48 @@ function initWeapons() {
   };
   if (weaponHud) weaponHud.dataset.weapon = weapons.currentId;
   if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
+}
+
+function applySpawn(spawnIndex) {
+  if (!player) return;
+  const off = SPAWN_OFFSETS[spawnIndex % SPAWN_OFFSETS.length];
+  player.setPosition(baseSpawn.x + off.x, baseSpawn.y, baseSpawn.z + off.z);
+}
+
+function enterGameplay(info) {
+  if (!player || !mapLoaded) return;
+  gameplayActive = true;
+  menu.hide();
+  if (hud) hud.hidden = false;
+  applySpawn(info.spawnIndex ?? 0);
+  player.enable();
+  if (weapons) {
+    weapons.paused = false;
+    weapons.net = net;
+  }
+  net.combat.reset();
+  setCrosshairVisible(true);
+  if (minimapWrap) minimapWrap.hidden = false;
+  setStatus(CONTROLS_LINE);
+  document.exitPointerLock?.();
+}
+
+function exitGameplayToMenu() {
+  gameplayActive = false;
+  if (player) {
+    player.disable();
+    document.exitPointerLock?.();
+  }
+  if (weapons) {
+    weapons.paused = true;
+    weapons.lmbHeld = false;
+  }
+  setScoping(false);
+  setCrosshairVisible(false);
+  if (hud) hud.hidden = true;
+  if (minimapWrap) minimapWrap.hidden = true;
+  net.disconnectMatch();
+  menu.show();
 }
 
 setStatus('Loading character…');
@@ -199,6 +336,7 @@ mapLoader.load(
       collisionWorld = new CollisionWorld(collisionMeshes);
       collisionWorld.setBounds(mapBox);
       const spawn = dropSpawnFromCorner(mapRoot, collisionWorld);
+      baseSpawn.set(spawn.x, spawn.y, spawn.z);
       mapHitMeshes = collectMapMeshes(mapRoot);
 
       setStatus('Building minimap…');
@@ -206,7 +344,7 @@ mapLoader.load(
 
       player = new PlayerController(renderer.domElement, collisionWorld);
       player.setPosition(spawn.x, spawn.y, spawn.z);
-      player.enable();
+      // Do not enable until match / menu chooses play
 
       interactables = new InteractableManager(scene, mapRoot);
       interactables.group.position.copy(mapRoot.position);
@@ -216,8 +354,10 @@ mapLoader.load(
       mapLoaded = true;
       bootComplete = true;
       initWeapons();
-      setCrosshairVisible(true);
-      setStatus(CONTROLS_LINE);
+      setCrosshairVisible(false);
+      menu.show();
+      void bootIdentity();
+      setStatus('Choose a mode to play');
     } catch (err) {
       console.error(err);
       setStatus(`Failed to start — ${err.message}`);
@@ -245,7 +385,6 @@ function updateThirdPersonCamera(feet, cameraYaw, pitch, delta) {
     Math.cos(cameraYaw) * cosPitch,
   );
 
-  // Pivot near head so the view clears the ground and the body sits lower in frame.
   cameraPivot.set(feet.x, feet.y + CAMERA_HEAD_Y, feet.z);
   cameraHorizBack.set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
 
@@ -260,7 +399,6 @@ function updateThirdPersonCamera(feet, cameraYaw, pitch, delta) {
     .addScaledVector(cameraHorizBack, targetDist);
   camera.position.y += CAMERA_LIFT;
 
-  // Look along aim from a point slightly ahead of the head so the crosshair clears the helmet.
   cameraLookTarget
     .copy(cameraPivot)
     .addScaledVector(cameraAimDir, 0.55)
@@ -286,10 +424,11 @@ function showPanel(item) {
 
 function hidePanel() {
   panel.hidden = true;
-  if (mapLoaded) setCrosshairVisible(true);
+  if (gameplayActive) setCrosshairVisible(true);
 }
 
 renderer.domElement.addEventListener('click', () => {
+  if (!gameplayActive) return;
   if (player && mapLoaded && panel.hidden) {
     weather.startRainAudio();
     if (weapons) weapons.initAudio();
@@ -302,7 +441,7 @@ renderer.domElement.addEventListener('contextmenu', (event) => {
 });
 
 function setScoping(active) {
-  const allowed = !!weapons?.canScope();
+  const allowed = !!weapons?.canScope() && gameplayActive;
   scoping = !!active && allowed;
   if (crosshair) {
     if (scoping) crosshair.classList.add('scoped');
@@ -313,7 +452,7 @@ function setScoping(active) {
 }
 
 window.addEventListener('mousedown', (event) => {
-  if (event.button === 2 && player?.pointerLocked && panel.hidden) {
+  if (event.button === 2 && gameplayActive && player?.pointerLocked && panel.hidden) {
     setScoping(true);
   }
 });
@@ -337,6 +476,7 @@ window.addEventListener('blur', () => {
 panelClose.addEventListener('click', hidePanel);
 
 window.addEventListener('keydown', (event) => {
+  if (!gameplayActive) return;
   if (event.code === 'KeyE' && interactables && panel.hidden) {
     const nearest = interactables.getNearest();
     if (nearest) showPanel(nearest);
@@ -359,7 +499,7 @@ function animate() {
 
   weather.update(delta, camera.position);
 
-  if (player && mapLoaded) {
+  if (player && mapLoaded && gameplayActive) {
     player.update(delta);
 
     const feet = player.getFeetPosition(new THREE.Vector3());
@@ -374,11 +514,18 @@ function animate() {
       weapons.update(delta, player, worldAimDir, camera.position);
     }
 
+    net.update(delta, player, weapons?.currentId || 'machinegun');
+
     const mouseLookActive = player.pointerLocked && !player.isMouseIdle();
     minimap.draw(feet.x, feet.z, player.cameraYaw, player.characterYaw, mouseLookActive);
 
     const nearest = interactables.update(feet, elapsed);
     prompt.hidden = !nearest || !panel.hidden;
+  } else if (player && mapLoaded) {
+    // Menu: keep a static third-person look at spawn
+    const feet = player.getFeetPosition(new THREE.Vector3());
+    character.position.copy(feet);
+    updateThirdPersonCamera(feet, player.cameraYaw, player.cameraPitch, delta);
   }
 
   renderer.render(scene, camera);

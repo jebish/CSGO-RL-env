@@ -279,6 +279,9 @@ export class WeaponSystem {
     this.index = 0;
     this.onWeaponChange = null;
     this.onAmmoChange = null;
+    this.net = null;
+    this.paused = true;
+    this._meleeHitSent = false;
     this.lmbHeld = false;
     this.swingT = 0;
     this.swinging = false;
@@ -678,6 +681,7 @@ export class WeaponSystem {
   }
 
   _onKeyDown(event) {
+    if (this.paused) return;
     if (event.code !== 'KeyR' || event.repeat) return;
     if (!this._pointerLocked()) return;
     event.preventDefault();
@@ -689,6 +693,7 @@ export class WeaponSystem {
   }
 
   _onWheel(event) {
+    if (this.paused) return;
     if (!this._pointerLocked()) return;
     event.preventDefault();
     if (event.deltaY < 0) this.cycle(1); // scroll up → clockwise
@@ -696,6 +701,7 @@ export class WeaponSystem {
   }
 
   _onDown(event) {
+    if (this.paused) return;
     if (event.button !== 0 || !this._pointerLocked()) return;
     this.lmbHeld = true;
     if (this.currentId === 'melee') this._startSwing();
@@ -713,6 +719,7 @@ export class WeaponSystem {
     if (this.swinging) return;
     this.swinging = true;
     this.swingT = 0;
+    this._meleeHitSent = false;
     this._ensureAudio();
     if (typeof this.audio.playMeleeSwing === 'function') this.audio.playMeleeSwing();
   }
@@ -786,6 +793,10 @@ export class WeaponSystem {
     if (hitPoint) this._aimEnd.copy(hitPoint);
     else this._aimEnd.copy(this._muzzleWorld).addScaledVector(this._forward, TRACER_LENGTH);
     this._spawnTracer(this._muzzleWorld, this._aimEnd, weaponId === 'sniper' ? 0.1 : 0.06);
+
+    if (this.net?.inMatch) {
+      this.net.tryHitscan(weaponId, this._muzzleWorld, this._forward);
+    }
   }
 
   _fireMachinegun(player, cameraPos) {
@@ -901,6 +912,29 @@ export class WeaponSystem {
       sparks,
       sparkPos,
       sparkAge: new Float32Array(sparkCount),
+      fromRemote: false,
+    });
+
+    if (this.net?.inMatch) {
+      this.net.notifyGrenadeThrow(root.position, vel, GRENADE_FUSE);
+    }
+  }
+
+  /** Spawn a visual-only grenade from a remote throw message. */
+  spawnRemoteGrenade(origin, vel, fuse = GRENADE_FUSE) {
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(
+      new THREE.CylinderGeometry(0.028, 0.032, 0.16, 10),
+      new THREE.MeshStandardMaterial({ color: 0x3f4f32, metalness: 0.45, roughness: 0.5 }),
+    ));
+    root.position.set(origin[0], origin[1], origin[2]);
+    this.scene.add(root);
+    this.liveGrenades.push({
+      mesh: root,
+      vel: new THREE.Vector3(vel[0], vel[1], vel[2]),
+      fuse,
+      settled: false,
+      fromRemote: true,
     });
   }
 
@@ -972,10 +1006,14 @@ export class WeaponSystem {
         } catch (err) {
           console.error(err);
         }
+        const boomPos = g.mesh.position.clone();
         try {
-          this.impacts.explodeAt(g.mesh.position.clone(), 4.0);
+          this.impacts.explodeAt(boomPos, 4.0);
         } catch (err) {
           console.error(err);
+        }
+        if (!g.fromRemote && this.net?.inMatch) {
+          this.net.resolveGrenadeExplosion(boomPos);
         }
         this.scene.remove(g.mesh);
         g.mesh.traverse((c) => {
@@ -1004,9 +1042,13 @@ export class WeaponSystem {
 
     this._aimDirRef = aimDir || null;
     this._cameraPos = cameraPos || null;
-    this._computeFireToCrosshair(cameraPos, aimDir, player);
+    if (!this.paused) {
+      this._computeFireToCrosshair(cameraPos, aimDir, player);
+    }
     this.impacts.update(performance.now() * 0.001, delta);
     this._updateGrenades(delta);
+
+    if (this.paused) return;
 
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
@@ -1036,6 +1078,9 @@ export class WeaponSystem {
           FLAME_RANGE,
           FLAME_HALF_ANGLE,
         );
+        if (this.net?.inMatch) {
+          this.net.tryFlameTick(this._muzzleWorld, this._forward, delta);
+        }
       }
 
       if (firing !== this._flameWasFiring) {
@@ -1071,6 +1116,10 @@ export class WeaponSystem {
       this.slots.melee.rotation.x = -arc * 1.35;
       this.slots.melee.rotation.y = arc * 0.55;
       this.slots.melee.rotation.z = -arc * 0.9;
+      if (!this._meleeHitSent && t >= 0.4 && this.net?.inMatch) {
+        this._meleeHitSent = true;
+        this.net.tryMelee(this._muzzleWorld, this._forward);
+      }
       if (t >= 1) {
         this.swinging = false;
         this.swingT = 0;
