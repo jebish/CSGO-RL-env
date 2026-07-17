@@ -48,7 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_username_cache: dict[str, str | None] = {"value": None, "error": None}
+_username_cache: dict[str, str | None] = {"value": None, "avatarUrl": None, "error": None}
 _space_probe: dict[str, float | str | None] = {"url": None, "checked_at": 0.0}
 
 
@@ -71,6 +71,11 @@ def _resolve_username() -> tuple[str | None, str | None]:
         name = data.get("name") or data.get("fullname")
         if not name:
             return None, "HF whoami returned no username"
+        avatar = data.get("avatarUrl") or data.get("avatar") or None
+        if isinstance(avatar, str) and avatar.strip():
+            _username_cache["avatarUrl"] = avatar.strip()
+        else:
+            _username_cache["avatarUrl"] = f"https://huggingface.co/avatars/{name}"
         _username_cache["value"] = str(name)
         _username_cache["error"] = None
         return _username_cache["value"], None
@@ -78,6 +83,11 @@ def _resolve_username() -> tuple[str | None, str | None]:
         err = f"HF whoami error: {exc}"
         _username_cache["error"] = err
         return None, err
+
+
+def _avatar_url() -> str | None:
+    _resolve_username()
+    return _username_cache.get("avatarUrl")
 
 
 def _space_ready() -> bool:
@@ -123,10 +133,10 @@ async def api_me():
     username, err = _resolve_username()
     if not username:
         return JSONResponse(
-            {"ok": False, "username": None, "error": err or "unauthorized"},
+            {"ok": False, "username": None, "avatarUrl": None, "error": err or "unauthorized"},
             status_code=401,
         )
-    return {"ok": True, "username": username}
+    return {"ok": True, "username": username, "avatarUrl": _avatar_url()}
 
 
 @app.get("/api/config")
@@ -137,6 +147,7 @@ async def api_config():
         "ok": True,
         "spaceUrl": space,
         "username": username,
+        "avatarUrl": _avatar_url() if username else None,
         "authError": err,
         "hasToken": bool(HF_TOKEN),
         "hasSpaceUrl": True,

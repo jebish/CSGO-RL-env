@@ -27,7 +27,9 @@ const GRENADE_GRAVITY = 18;
 const MACHINEGUN_RECOIL_MOVING_DEG = 6;
 const MACHINEGUN_RECOIL_SCOPED_DEG = 4;
 const MACHINEGUN_RECOIL_STILL_DEG = 3;
-const SNIPER_RECOIL_SCOPED_DEG = 5;
+/** Scoped sniper: perfect when still; ≤2° cone while moving. */
+const SNIPER_SCOPED_STILL_DEG = 0;
+const SNIPER_SCOPED_MOVING_DEG = 2;
 /** Hip FOV / scope FOV ≈ zoom. Sniper zoom = 2.5× machinegun zoom. */
 const MACHINEGUN_SCOPE_FOV = 48;
 const SNIPER_SCOPE_FOV = MACHINEGUN_SCOPE_FOV / 2.5;
@@ -732,10 +734,27 @@ export class WeaponSystem {
     } else if (!scopedOnly && player.isMoving()) {
       coneDeg = movingDeg;
     }
+    if (coneDeg <= 0) return;
     const half = THREE.MathUtils.degToRad(coneDeg * 0.5);
     const r = Math.sqrt(Math.random()) * half;
     const theta = Math.random() * Math.PI * 2;
     player.applyRecoil(Math.cos(theta) * r, Math.sin(theta) * r);
+  }
+
+  /** Offset a unit direction inside a cone (degrees full-width). */
+  _applyConeToDirection(dir, coneDeg) {
+    if (!dir || coneDeg <= 0) return;
+    const half = THREE.MathUtils.degToRad(coneDeg * 0.5);
+    const r = Math.sqrt(Math.random()) * half;
+    const theta = Math.random() * Math.PI * 2;
+    this._viewRight.crossVectors(dir, this._worldUp);
+    if (this._viewRight.lengthSq() < 1e-8) this._viewRight.set(1, 0, 0);
+    else this._viewRight.normalize();
+    this._viewLeft.crossVectors(this._viewRight, dir).normalize();
+    dir
+      .addScaledVector(this._viewRight, Math.cos(theta) * Math.tan(r))
+      .addScaledVector(this._viewLeft, Math.sin(theta) * Math.tan(r))
+      .normalize();
   }
 
   _spawnTracer(from, to, life = 0.06) {
@@ -773,11 +792,26 @@ export class WeaponSystem {
 
     this.actionCooldown = interval;
     this.muzzleFlashT = weaponId === 'sniper' ? 0.09 : 0.05;
-    this._applyBallisticRecoil(player, recoil);
     if (!this._consumeRound(weaponId)) return;
 
     const aim = player ? player.getAimDirection(this._traceDir) : this._aimDirRef;
-    this._computeFireToCrosshair(cameraPos || this._cameraPos, aim, player);
+    const cam = cameraPos || this._cameraPos;
+    const sniperScoped = weaponId === 'sniper' && this.scoping && cam && aim;
+
+    if (sniperScoped) {
+      // Perfect FOV/crosshair ray when stable; small cone only while moving.
+      this._muzzleWorld.copy(cam);
+      this._forward.copy(aim).normalize();
+      if (player?.isMoving?.()) {
+        this._applyConeToDirection(this._forward, SNIPER_SCOPED_MOVING_DEG);
+      } else {
+        this._applyConeToDirection(this._forward, SNIPER_SCOPED_STILL_DEG);
+      }
+    } else {
+      this._applyBallisticRecoil(player, recoil);
+      this._computeFireToCrosshair(cam, player ? player.getAimDirection(this._traceDir) : aim, player);
+    }
+
     this._ensureAudio();
     try {
       playShot();
@@ -821,10 +855,11 @@ export class WeaponSystem {
       ensureLoaded: () => this._loadSniperModel(),
       interval: SNIPER_FIRE_INTERVAL,
       requireScope: true,
+      // Unused while scoped (camera-ray path); kept for hip/fallback.
       recoil: {
-        movingDeg: SNIPER_RECOIL_SCOPED_DEG,
-        scopedDeg: SNIPER_RECOIL_SCOPED_DEG,
-        stillDeg: SNIPER_RECOIL_SCOPED_DEG,
+        movingDeg: SNIPER_SCOPED_MOVING_DEG,
+        scopedDeg: SNIPER_SCOPED_STILL_DEG,
+        stillDeg: SNIPER_SCOPED_STILL_DEG,
         scopedOnly: true,
       },
       playShot: () => this.audio.playSniperShot(),

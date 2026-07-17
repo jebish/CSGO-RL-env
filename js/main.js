@@ -5,9 +5,11 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js';
-import { WeaponSystem } from './weapons.js?v=7';
+import { WeaponSystem } from './weapons.js?v=9';
 import { GameMenu } from './ui-menu.js';
 import { NetClient, SPAWN_OFFSETS } from './net.js';
+
+const DAMAGE_VIGNETTE_SEC = 2;
 
 const hud = document.getElementById('hud');
 const minimapWrap = document.getElementById('minimap-wrap');
@@ -21,8 +23,63 @@ const footerText = document.getElementById('footer-text');
 const weaponHud = document.getElementById('weapon-hud');
 const ammoHud = document.getElementById('ammo-hud');
 const hpHud = document.getElementById('hp-hud');
+const hpValue = document.getElementById('hp-value');
+const damageVignette = document.getElementById('damage-vignette');
+const playerHud = document.getElementById('player-hud');
+const playerAvatar = document.getElementById('player-avatar');
+const playerName = document.getElementById('player-name');
 const crosshair = document.getElementById('crosshair');
 const menuRoot = document.getElementById('menu-root');
+
+let lastHp = 100;
+let damageVignetteT = 0;
+
+function formatHp(hp) {
+  const n = Math.max(0, Math.min(100, Math.ceil(hp)));
+  return String(n).padStart(3, '0');
+}
+
+function setHpHud(hp, alive) {
+  const el = hpValue || hpHud;
+  if (!el) return;
+  if (hpValue) hpValue.textContent = alive ? formatHp(hp) : '000';
+  else hpHud.textContent = alive ? formatHp(hp) : '000';
+  if (hpHud) hpHud.classList.toggle('dead', !alive);
+}
+
+function pulseDamageVignette() {
+  damageVignetteT = DAMAGE_VIGNETTE_SEC;
+  if (damageVignette) damageVignette.style.opacity = '1';
+}
+
+function updateDamageVignette(delta) {
+  if (damageVignetteT <= 0) return;
+  damageVignetteT = Math.max(0, damageVignetteT - delta);
+  if (damageVignette) {
+    damageVignette.style.opacity = String(damageVignetteT / DAMAGE_VIGNETTE_SEC);
+  }
+}
+
+function setPlayerIdentityHud({ username, avatarUrl }) {
+  if (!playerHud) return;
+  if (!username) {
+    playerHud.hidden = true;
+    return;
+  }
+  playerHud.hidden = false;
+  if (playerName) playerName.textContent = username;
+  if (playerAvatar) {
+    if (avatarUrl) {
+      playerAvatar.hidden = false;
+      playerAvatar.src = avatarUrl;
+      playerAvatar.onerror = () => {
+        playerAvatar.hidden = true;
+      };
+    } else {
+      playerAvatar.hidden = true;
+    }
+  }
+}
 
 function setStatus(text) {
   if (footerText) footerText.textContent = text;
@@ -132,7 +189,9 @@ const net = new NetClient({
 });
 
 net.combat.onHpChange = (hp, alive) => {
-  if (hpHud) hpHud.textContent = alive ? String(Math.ceil(hp)) : 'DEAD';
+  if (alive && hp < lastHp) pulseDamageVignette();
+  lastHp = hp;
+  setHpHud(hp, alive);
 };
 
 net.combat.onRespawn = () => {
@@ -202,6 +261,12 @@ async function bootIdentity() {
     spaceUrl: net.spaceUrl,
     authError: res.ok ? null : res.error,
   });
+  setPlayerIdentityHud({
+    username: net.username,
+    avatarUrl: net.avatarUrl,
+  });
+  setHpHud(net.combat.hp, net.combat.alive);
+  lastHp = net.combat.hp;
   if (!res.ok) setStatus(res.error);
   else setStatus(`Online as ${net.username}`);
 }
@@ -498,6 +563,7 @@ function animate() {
   const elapsed = clock.elapsedTime;
 
   weather.update(delta, camera.position);
+  updateDamageVignette(delta);
 
   if (player && mapLoaded && gameplayActive) {
     player.update(delta);

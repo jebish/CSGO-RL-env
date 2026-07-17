@@ -24,6 +24,7 @@ export class NetClient {
     this.onLobbyUpdate = onLobbyUpdate || (() => {});
 
     this.username = null;
+    this.avatarUrl = null;
     this.spaceUrl = null;
     this.mode = null; // sandbox | 1v1 | 4v4
     this.lobbyId = null;
@@ -54,10 +55,18 @@ export class NetClient {
     // Empty spaceUrl = same origin. Config auto-picks HF Space when healthy.
     this.spaceUrl = cfg.spaceUrl || '';
     this.username = cfg.username || null;
+    this.avatarUrl = cfg.avatarUrl || (this.username
+      ? `https://huggingface.co/avatars/${encodeURIComponent(this.username)}`
+      : null);
     if (!cfg.hasToken || !this.username) {
       return { ok: false, error: cfg.authError || 'Set HF_TOKEN in .env.local' };
     }
-    return { ok: true, username: this.username, spaceUrl: this.spaceUrl || window.location.origin };
+    return {
+      ok: true,
+      username: this.username,
+      avatarUrl: this.avatarUrl,
+      spaceUrl: this.spaceUrl || window.location.origin,
+    };
   }
 
   _lobbyBase() {

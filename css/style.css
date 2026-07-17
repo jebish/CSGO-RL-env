@@ -29,9 +29,61 @@ canvas {
   z-index: 10;
 }
 
+#player-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 16;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  pointer-events: none;
+}
+
+#player-hud[hidden] {
+  display: none !important;
+}
+
+#player-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  background: #222;
+}
+
+#player-name {
+  font-family: "Arial Black", "Helvetica Neue", Impact, sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: #fff;
+  text-shadow:
+    0 0 2px #000,
+    1px 1px 0 #000,
+    -1px 1px 0 #000,
+    1px -1px 0 #000,
+    -1px -1px 0 #000;
+}
+
+#damage-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 42%,
+    rgba(140, 0, 0, 0.28) 68%,
+    rgba(110, 0, 0, 0.72) 100%
+  );
+  z-index: 11;
+}
+
 #weapon-hud {
   position: absolute;
-  top: 10px;
+  top: 58px;
   right: 12px;
   width: 72px;
   height: 72px;
@@ -53,7 +105,7 @@ canvas {
 
 #ammo-hud {
   position: absolute;
-  top: 88px;
+  top: 136px;
   right: 12px;
   padding: 0.3rem 0.65rem;
   border: 1px solid #000;
@@ -127,12 +179,14 @@ canvas {
 }
 
 #minimap-wrap {
-  position: fixed;
+  position: absolute;
+  top: auto;
+  right: auto;
   left: 10px;
-  bottom: 26px;
+  bottom: 28px;
   width: 148px;
   height: 148px;
-  z-index: 15;
+  z-index: 12;
   pointer-events: none;
 }
 
@@ -214,14 +268,47 @@ kbd {
 
 #hp-hud {
   position: absolute;
-  left: 14px;
-  bottom: 36px;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid #000;
-  background: #000;
+  top: 10px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: #fff;
-  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+#hp-hud .hp-icon {
+  width: 28px;
+  height: 28px;
+  fill: #e11d2e;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.9));
+  flex-shrink: 0;
+}
+
+#hp-value {
+  font-family: "Arial Black", "Helvetica Neue", Impact, sans-serif;
+  font-size: 1.55rem;
+  line-height: 1;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+  color: #f4f4f4;
+  text-shadow:
+    0 0 2px #000,
+    1px 1px 0 #000,
+    -1px 1px 0 #000,
+    1px -1px 0 #000,
+    -1px -1px 0 #000;
+}
+
+#hp-hud.dead #hp-value {
+  color: #b0b0b0;
+}
+
+#hp-hud.dead .hp-icon {
+  fill: #666;
 }
 
 /* ── Start / lobby menus ─────────────────────────────────────────── */
