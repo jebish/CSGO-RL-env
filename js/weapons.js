@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { WeaponAudio } from './weapon-audio.js?v=13';
 import { ImpactSystem } from './impacts.js?v=5';
-import { SMOKE_RADIUS } from './combat.js';
+import { SMOKE_RADIUS } from './combat.js?v=3';
 
 const WEAPON_IDS = ['machinegun', 'shotgun', 'sniper', 'flamethrower', 'grenade', 'smoke', 'melee'];
 const WEAPON_LABELS = {
@@ -339,10 +339,12 @@ class FlameCone {
   }
 }
 
-const SMOKE_PARTICLES = 220;
+const SMOKE_PARTICLES = 640;
 /** Keep emitting through expand+hold; last 1s only existing wisps fade. */
 const SMOKE_EMIT_SEC = SMOKE_EXPAND_SEC + SMOKE_HOLD_SEC;
 const SMOKE_PUFF_LIFE = 3.2;
+/** SmokeCloud was authored around HE×1.1 (~4.4m); scale motion/size from that. */
+const SMOKE_DESIGN_RADIUS = 4.4;
 
 function createSmokeTexture() {
   const size = 128;
@@ -445,21 +447,23 @@ class SmokeCloud {
       slot = oldest;
     }
 
-    const jitter = 0.14;
+    const scale = Math.max(0.25, this.radius / SMOKE_DESIGN_RADIUS);
+    const jitter = 0.14 * scale;
     this.px[slot] = this.origin.x + (Math.random() - 0.5) * jitter;
-    this.py[slot] = this.origin.y + Math.random() * 0.12;
+    this.py[slot] = this.origin.y + Math.random() * 0.12 * scale;
     this.pz[slot] = this.origin.z + (Math.random() - 0.5) * jitter;
 
     const ang = Math.random() * Math.PI * 2;
-    const out = (0.35 + Math.random() * 0.85) * speedScale;
-    const up = (0.25 + Math.random() * 0.55) * speedScale;
+    // Velocities must grow with radius or the cloud stays tiny while the limit number climbs.
+    const out = (0.35 + Math.random() * 0.85) * speedScale * scale;
+    const up = (0.25 + Math.random() * 0.55) * speedScale * scale;
     this.vx[slot] = Math.cos(ang) * out;
     this.vy[slot] = up;
     this.vz[slot] = Math.sin(ang) * out;
 
     this.life[slot] = 0;
     this.maxLife[slot] = SMOKE_PUFF_LIFE * (0.75 + Math.random() * 0.5);
-    this.baseSize[slot] = 1.1 + Math.random() * 1.6; // meters — scales with FOV
+    this.baseSize[slot] = (1.1 + Math.random() * 1.6) * Math.sqrt(scale);
     this.alive[slot] = 1;
   }
 
@@ -474,10 +478,11 @@ class SmokeCloud {
 
     const emitting = this.age < SMOKE_EMIT_SEC;
     let emitRate = 0;
+    const dens = Math.max(1, this.radius / SMOKE_DESIGN_RADIUS);
     if (this.age < SMOKE_EXPAND_SEC) {
-      emitRate = 70 * (this.age / SMOKE_EXPAND_SEC);
+      emitRate = 70 * dens * (this.age / SMOKE_EXPAND_SEC);
     } else if (emitting) {
-      emitRate = 85;
+      emitRate = 85 * dens;
     }
 
     if (emitRate > 0) {
@@ -886,7 +891,6 @@ export class WeaponSystem {
     }
     this._spawnScopedVisibleTracer(from, d, to, true, life, radius);
     this._pulseRemoteMuzzle(from, weaponId);
-    this._spawnRemoteMuzzleSprite(from, weaponId);
 
     this._ensureAudio();
     try {
@@ -898,38 +902,17 @@ export class WeaponSystem {
     }
   }
 
+  /** Same PointLight values as local `_updateMuzzleLight` / muzzleFlashT — no sprite mesh. */
   _pulseRemoteMuzzle(origin, weaponId = 'machinegun') {
     if (!this.muzzleLight || !origin) return;
     this.muzzleLight.position.copy(origin);
     const sniper = weaponId === 'sniper';
     const shotgun = weaponId === 'shotgun';
-    this.muzzleLight.color.setHex(sniper ? 0xffe0a0 : shotgun ? 0xffaa66 : 0xffcc66);
-    this.muzzleLight.intensity = sniper ? 8 : shotgun ? 6.5 : 5;
-    this.muzzleLight.distance = sniper ? 9 : 6;
-    this._remoteMuzzleT = sniper ? 0.14 : shotgun ? 0.1 : 0.08;
-  }
-
-  _spawnMuzzleSprite(origin, weaponId = 'machinegun') {
-    if (!origin) return;
-    const size = weaponId === 'sniper' ? 0.55 : weaponId === 'shotgun' ? 0.55 : 0.35;
-    const geo = new THREE.SphereGeometry(size * 0.35, 8, 8);
-    const mat = new THREE.MeshBasicMaterial({
-      color: weaponId === 'sniper' ? 0xfff0c0 : weaponId === 'shotgun' ? 0xffaa55 : 0xffcc66,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(origin);
-    mesh.renderOrder = 4;
-    this.scene.add(mesh);
-    const life = weaponId === 'sniper' ? 0.1 : weaponId === 'shotgun' ? 0.09 : 0.07;
-    this.tracers.push({ mesh, life, muzzleSprite: true });
-  }
-
-  _spawnRemoteMuzzleSprite(origin, weaponId = 'machinegun') {
-    this._spawnMuzzleSprite(origin, weaponId);
+    this.muzzleLight.color.setHex(0xffcc66);
+    this.muzzleLight.intensity = sniper ? 5 : 3.5;
+    this.muzzleLight.distance = 5;
+    // Match local muzzleFlashT durations exactly.
+    this._remoteMuzzleT = sniper ? 0.09 : shotgun ? 0.1 : 0.05;
   }
 
   isReloading(weaponId = this.currentId) {
@@ -1440,7 +1423,7 @@ export class WeaponSystem {
     }
 
     this.actionCooldown = SHOTGUN_FIRE_INTERVAL;
-    this.muzzleFlashT = 0.12;
+    this.muzzleFlashT = 0.1;
     if (!this._consumeRound('shotgun')) return;
 
     const aim = player ? player.getAimDirection(this._traceDir) : this._aimDirRef;
@@ -1454,11 +1437,6 @@ export class WeaponSystem {
     } catch (err) {
       console.error(err);
     }
-
-    // Local muzzle flash (light + sprite). Was previously a no-op: update() only
-    // drove the muzzle light for MG/sniper, so shotgun flash never showed.
-    this._updateMuzzleLight(true, 0xffaa55, 7);
-    this._spawnMuzzleSprite(this._muzzleWorld, 'shotgun');
 
     const pellets = SHOTGUN_PELLETS_MIN
       + Math.floor(Math.random() * (SHOTGUN_PELLETS_MAX - SHOTGUN_PELLETS_MIN + 1));
@@ -1753,10 +1731,8 @@ export class WeaponSystem {
       this._remoteMuzzleT = Math.max(0, this._remoteMuzzleT - delta);
       if (this._remoteMuzzleT <= 0 && this.muzzleLight) {
         this.muzzleLight.intensity = 0;
-      } else if (this.muzzleLight && this._remoteMuzzleT > 0) {
-        // Fade out remote flash
-        this.muzzleLight.intensity *= 0.82;
       }
+      // Hold full intensity for the flash window (same as local muzzleFlashT), no extra fade.
     }
 
     this._aimDirRef = aimDir || null;
@@ -1829,23 +1805,14 @@ export class WeaponSystem {
       }
       if (this.currentId === 'machinegun' || this.currentId === 'sniper' || this.currentId === 'shotgun') {
         this.flame.setFiring(false);
-        // Don't stomp a remote spectator flash still decaying on the shared light.
-        if (this._remoteMuzzleT > 0) {
-          /* remote pulse owns the light */
-        } else if (this.currentId === 'shotgun') {
-          this._updateMuzzleLight(this.muzzleFlashT > 0, 0xffaa55, 6.5);
-        } else {
-          this._updateMuzzleLight(
-            this.muzzleFlashT > 0,
-            0xffcc66,
-            this.currentId === 'sniper' ? 5 : 3.5,
-          );
-        }
+        this._updateMuzzleLight(
+          this.muzzleFlashT > 0,
+          0xffcc66,
+          this.currentId === 'sniper' ? 5 : 3.5,
+        );
       } else {
         this.flame.setFiring(false);
-        if (this._remoteMuzzleT <= 0) {
-          this._updateMuzzleLight(false, 0xffcc66, 0);
-        }
+        this._updateMuzzleLight(false, 0xffcc66, 0);
       }
     }
 

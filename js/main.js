@@ -5,7 +5,7 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js?v=10';
-import { WeaponSystem } from './weapons.js?v=26';
+import { WeaponSystem } from './weapons.js?v=29';
 import { GameMenu } from './ui-menu.js?v=35';
 import { NetClient, SPAWN_OFFSETS } from './net.js?v=35';
 import { SpectatorController } from './spectator.js?v=35';
