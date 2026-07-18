@@ -6,3 +6,4 @@ temp-dont-use-directly/
 ref/
 server/.venv/
 .space_build/
+*.pyc
