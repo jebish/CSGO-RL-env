@@ -915,6 +915,37 @@ export class WeaponSystem {
     this._remoteMuzzleT = sniper ? 0.09 : shotgun ? 0.1 : 0.05;
   }
 
+  /** Wipe tracer meshes (stuck lines after paused/broken updates). */
+  clearTracers() {
+    for (const tr of this.tracers) {
+      this.scene.remove(tr.mesh);
+      tr.mesh?.geometry?.dispose?.();
+      if (tr.mesh?.material && tr.muzzleSprite) tr.mesh.material.dispose?.();
+    }
+    this.tracers.length = 0;
+  }
+
+  /**
+   * Enable local shooting for a live match. Safe to call on match start AND every respawn
+   * so a late model load / spectate pause can't leave the player gunless for the rest of the game.
+   */
+  armForPlay(net = null) {
+    this.paused = false;
+    if (net) this.net = net;
+    this.lmbHeld = false;
+    this.actionCooldown = 0;
+    this.muzzleFlashT = 0;
+    this.swinging = false;
+    this.swingT = 0;
+    this._meleeHitSent = false;
+    if (this.reloading) {
+      this.reloading = null;
+      this.reloadTimer = 0;
+    }
+    this.clearTracers();
+    if (this.muzzleLight) this.muzzleLight.intensity = 0;
+  }
+
   isReloading(weaponId = this.currentId) {
     return !!this.reloading && (!weaponId || this.reloading === weaponId);
   }
@@ -1210,9 +1241,16 @@ export class WeaponSystem {
     else if (event.deltaY > 0) this.cycle(-1); // scroll down → anticlockwise
   }
 
+  _canShootNow() {
+    if (this.paused || !this._pointerLocked()) return false;
+    // Dead until respawn — no local fire / tracer spam.
+    if (this.net?.combat && this.net.combat.alive === false) return false;
+    return true;
+  }
+
   _onDown(event) {
-    if (this.paused) return;
-    if (event.button !== 0 || !this._pointerLocked()) return;
+    if (!this._canShootNow()) return;
+    if (event.button !== 0) return;
     this.lmbHeld = true;
     if (this.currentId === 'melee') this._startSwing();
     if (this.currentId === 'machinegun') this._fireMachinegun(this._playerRef, this._cameraPos);
@@ -1716,9 +1754,27 @@ export class WeaponSystem {
   }
 
   update(delta, player, aimDir, cameraPos, camera = null) {
-    if (!this.ready) return;
     this._playerRef = player || null;
     this._camera = camera || this._camera || null;
+
+    // Tracer cleanup always runs (even before models ready / while paused) so lines
+    // never freeze on screen for the rest of a match.
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      const tr = this.tracers[i];
+      tr.life -= delta;
+      if (tr.muzzleSprite && tr.mesh?.material) {
+        tr.mesh.material.opacity = Math.max(0, tr.life * 12);
+        tr.mesh.scale.multiplyScalar(1 + delta * 8);
+      }
+      if (!Number.isFinite(tr.life) || tr.life <= 0) {
+        this.scene.remove(tr.mesh);
+        tr.mesh.geometry.dispose();
+        if (tr.mesh.material && tr.muzzleSprite) tr.mesh.material.dispose();
+        this.tracers.splice(i, 1);
+      }
+    }
+
+    if (!this.ready) return;
 
     if (this.reloading) {
       this.reloadTimer -= delta;
@@ -1732,7 +1788,6 @@ export class WeaponSystem {
       if (this._remoteMuzzleT <= 0 && this.muzzleLight) {
         this.muzzleLight.intensity = 0;
       }
-      // Hold full intensity for the flash window (same as local muzzleFlashT), no extra fade.
     }
 
     this._aimDirRef = aimDir || null;
@@ -1745,33 +1800,17 @@ export class WeaponSystem {
     this._updateSmokes(delta, this._camera);
     this._updateRemoteFlames(delta);
 
-    // Always decay tracers + muzzle sprites (paused spectate still receives remote FX).
-    for (let i = this.tracers.length - 1; i >= 0; i--) {
-      const tr = this.tracers[i];
-      tr.life -= delta;
-      if (tr.muzzleSprite && tr.mesh?.material) {
-        tr.mesh.material.opacity = Math.max(0, tr.life * 12);
-        tr.mesh.scale.multiplyScalar(1 + delta * 8);
-      }
-      if (tr.life <= 0) {
-        this.scene.remove(tr.mesh);
-        tr.mesh.geometry.dispose();
-        if (tr.mesh.material && tr.muzzleSprite) tr.mesh.material.dispose();
-        this.tracers.splice(i, 1);
-      }
-    }
-
     if (this.paused) return;
 
-    if (this.currentId === 'machinegun' && this.lmbHeld && this._pointerLocked() && !this.reloading) {
+    if (this.currentId === 'machinegun' && this.lmbHeld && this._canShootNow() && !this.reloading) {
       this._fireMachinegun(player, cameraPos);
     }
-    if (this.currentId === 'shotgun' && this.lmbHeld && this._pointerLocked() && !this.reloading) {
+    if (this.currentId === 'shotgun' && this.lmbHeld && this._canShootNow() && !this.reloading) {
       this._fireShotgun(player, cameraPos);
     }
 
     if (this.currentId === 'flamethrower') {
-      const wantsFire = this.lmbHeld && this._pointerLocked() && !this.reloading;
+      const wantsFire = this.lmbHeld && this._canShootNow() && !this.reloading;
       const canFire = wantsFire && this._canUseAmmo('flamethrower');
       if (wantsFire && !canFire) this._startReload('flamethrower', true);
 

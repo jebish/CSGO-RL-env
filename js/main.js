@@ -5,7 +5,7 @@ import { InteractableManager } from './interactables.js';
 import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js?v=4';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js?v=10';
-import { WeaponSystem } from './weapons.js?v=29';
+import { WeaponSystem } from './weapons.js?v=30';
 import { GameMenu } from './ui-menu.js?v=35';
 import { NetClient, SPAWN_OFFSETS } from './net.js?v=36';
 import { SpectatorController } from './spectator.js?v=35';
@@ -309,6 +309,11 @@ net.onSpectateHit = (msg) => {
 net.combat.onRespawn = () => {
   if (!player) return;
   applySpawn(net._spawnIndex || 0);
+  // Re-arm every respawn — kill/respawn must not leave guns paused for the rest of the match.
+  if (!net.spectating && !spectator.active) {
+    initWeapons();
+    armWeaponsForPlay();
+  }
 };
 
 net.onRemoteFire = (msg) => {
@@ -459,6 +464,13 @@ function fitCharacterModel(model) {
   });
 }
 
+function armWeaponsForPlay() {
+  if (!weapons) return;
+  weapons.armForPlay(net);
+  if (weaponHud) weaponHud.dataset.weapon = weapons.currentId;
+  if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
+}
+
 function initWeapons() {
   if (weapons || !characterReady || !mapLoaded) return;
   weapons = new WeaponSystem(scene, character, renderer.domElement);
@@ -467,6 +479,10 @@ function initWeapons() {
   weapons.paused = true;
   weapons.onArmsReady = () => {
     net.ghosts.setArmsFactory(() => weapons.createGhostArms());
+    // Late GLB finish mid-match — arm now so this isn't gunless until the next lobby.
+    if (gameplayActive && !net.spectating && !spectator.active) {
+      armWeaponsForPlay();
+    }
   };
   if (weapons.ready) weapons.onArmsReady();
   weapons.onWeaponChange = (weaponId) => {
@@ -478,6 +494,10 @@ function initWeapons() {
   };
   if (weaponHud) weaponHud.dataset.weapon = weapons.currentId;
   if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
+  // Match already live when character/weapons finally boot.
+  if (gameplayActive && !net.spectating && !spectator.active) {
+    armWeaponsForPlay();
+  }
 }
 
 /** Drop-in height (meters) above floor before settle — same gravity path for every seat. */
@@ -531,11 +551,8 @@ function enterGameplay(info) {
   if (hud) hud.hidden = false;
   applySpawn(info.spawnIndex ?? 0);
   player.enable();
-  if (weapons) {
-    weapons.paused = false;
-    weapons.net = net;
-    weapons.lmbHeld = false;
-  }
+  initWeapons();
+  armWeaponsForPlay();
   net.combat.reset();
   setCrosshairVisible(true);
   if (weaponHud) weaponHud.hidden = false;
@@ -960,8 +977,14 @@ function animate() {
     camera.getWorldDirection(worldAimDir);
 
     if (weapons) {
+      // Heal stuck pause (e.g. spectate flag blip) for the whole match, not only first spawn.
+      if (!net.spectating && !spectator.active && weapons.paused) {
+        armWeaponsForPlay();
+      }
       if (scoping && !weapons.canScope()) setScoping(false);
       weapons.update(delta, player, worldAimDir, camera.position, camera);
+    } else {
+      initWeapons();
     }
 
     net.update(delta, player, weapons?.currentId || 'machinegun', {
