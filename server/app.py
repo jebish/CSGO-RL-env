@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 from pathlib import Path
+from typing import Optional
 
 import uvicorn
 import httpx
@@ -29,7 +30,7 @@ mimetypes.add_type("model/gltf+json", ".gltf")
 class ClaimBody(BaseModel):
     username: str = Field(..., min_length=1)
     seat: str = Field(..., min_length=1)
-    avatarUrl: str | None = None
+    avatarUrl: Optional[str] = None
 
 
 class LeaveBody(BaseModel):

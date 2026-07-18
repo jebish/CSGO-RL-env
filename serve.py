@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import httpx
 import uvicorn
@@ -118,7 +119,7 @@ def _game_server_url() -> str:
 class ClaimBody(BaseModel):
     username: str = Field(..., min_length=1)
     seat: str = Field(..., min_length=1)
-    avatarUrl: str | None = None
+    avatarUrl: Optional[str] = None
 
 
 class LeaveBody(BaseModel):
