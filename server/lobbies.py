@@ -19,6 +19,9 @@ SQUAD_CAP = 8  # 4 + 4
 # 4v4: start if full, or idle 60s with ≥1 per side
 SQUAD_IDLE_START_SEC = 60.0
 SEAT_STALE_SEC = 8.0
+# Ghost matches: if nobody heartbeats, free the lobby (was locking seats forever).
+STARTING_TIMEOUT_SEC = 40.0
+LIVE_STALE_SEC = 40.0
 
 
 def _now() -> float:
@@ -186,15 +189,27 @@ class LobbyBoard:
                 stale_users.append(username)
                 continue
             hb = lobby.get("_hb", {}).get(username, lobby["last_change"])
-            # Protect both live AND starting — otherwise both seats get wiped
-            # in the window between "lobby full" and match_start / mark_live.
-            if now - hb > SEAT_STALE_SEC and lobby["status"] not in ("live", "starting"):
+            status = lobby["status"]
+            if status == "open" and now - hb > SEAT_STALE_SEC:
+                stale_users.append(username)
+            elif status == "live" and now - hb > LIVE_STALE_SEC:
+                # Drop ghost "live" seats so the board doesn't stay unclickable forever.
+                stale_users.append(username)
+            elif status == "starting" and now - lobby["last_change"] > STARTING_TIMEOUT_SEC:
                 stale_users.append(username)
         for u in stale_users:
             self._clear_user(u)
 
-        for lobby in self.lobbies.values():
-            if lobby["status"] == "open":
+        for lobby in list(self.lobbies.values()):
+            if lobby["status"] == "starting" and now - lobby["last_change"] > STARTING_TIMEOUT_SEC:
+                self._reset_lobby(lobby)
+            elif lobby["status"] == "live":
+                seated = [u for u in lobby["seats"].values() if u]
+                if seated and all(
+                    now - lobby.get("_hb", {}).get(u, 0) > LIVE_STALE_SEC for u in seated
+                ):
+                    self._reset_lobby(lobby)
+            elif lobby["status"] == "open":
                 self._maybe_start(lobby)
 
     def _maybe_start(self, lobby: dict[str, Any]) -> bool:

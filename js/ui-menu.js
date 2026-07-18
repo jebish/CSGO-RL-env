@@ -167,19 +167,30 @@ export class GameMenu {
       lobby.status === 'live' ||
       lobby.status === 'starting';
     btn.disabled = locked;
-    btn.title = seat; // internal id (X-1, Y-2, …)
+    btn.title = locked
+      ? (lobby.status === 'live' || lobby.status === 'starting'
+        ? `${lobby.id} is ${lobby.status} — pick another lobby or wait ~20s for it to free`
+        : (user ? `${user} is seated` : 'Spectate only'))
+      : seat;
     btn.innerHTML = user
       ? `${meta.label}<span class="seat-who">${user}</span>`
       : meta.label;
     if (this.playAllowed) {
       btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
         try {
           this._setError('');
+          btn.disabled = true;
+          btn.textContent = '…';
           await this.onClaim?.(mode, lobby.id, seat);
           this.selectedLobby = lobby.id;
         } catch (err) {
           this._setError(err.message || String(err));
         }
+      });
+    } else if (locked) {
+      btn.addEventListener('click', () => {
+        this._setError(btn.title || 'Seat locked');
       });
     }
     return btn;
