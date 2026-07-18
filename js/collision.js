@@ -143,29 +143,72 @@ export class CollisionWorld {
   }
 
   dropToGround(x, z, box) {
-    const feet = new THREE.Vector3(x, box.max.y + DROP_HEIGHT, z);
-    const state = { velocityY: 0, onGround: false };
+    return this.dropFromAbove(x, z, box, DROP_HEIGHT);
+  }
 
-    for (let i = 0; i < 1000; i += 1) {
-      state.velocityY -= 28 * (1 / 60);
-      this.moveVertical(feet, state.velocityY, 1 / 60, state);
-      if (state.onGround) break;
-    }
+  /**
+   * Start `metersAbove` over the floor under (x,z) (or over map top if unknown),
+   * then run the same vertical settle as gameplay gravity until onGround.
+   * Spirals outward if that XZ is a pit/gap so someone still lands on real floor.
+   */
+  dropFromAbove(x, z, box, metersAbove = 12) {
+    const tryOne = (px, pz) => {
+      const groundY = this.findWalkableGroundY(px, pz, box.max.y + DROP_HEIGHT);
+      const startY = (groundY != null ? groundY : box.max.y) + metersAbove;
+      const feet = new THREE.Vector3(px, startY, pz);
+      const state = { velocityY: 0, onGround: false };
 
-    if (!state.onGround) {
-      const y = this.findWalkableGroundY(x, z, box.max.y + DROP_HEIGHT);
-      // Do NOT fake a landing at box.max.y — that parks people in the sky/void.
-      if (y == null) {
-        feet.y = box.min.y - 50; // clearly invalid; callers must validate
-        return feet;
+      for (let i = 0; i < 2000; i += 1) {
+        state.velocityY -= 28 * (1 / 60);
+        this.moveVertical(feet, state.velocityY, 1 / 60, state);
+        if (state.onGround) break;
+        // Fell through the world — abort this XZ.
+        if (feet.y < box.min.y - 5) {
+          state.onGround = false;
+          break;
+        }
       }
-      feet.y = y;
-      state.onGround = true;
+
+      if (!state.onGround) {
+        const y = this.findWalkableGroundY(px, pz, box.max.y + DROP_HEIGHT);
+        if (y == null) return null;
+        feet.y = y;
+        state.onGround = true;
+      }
+
+      this.snapToGroundSkin(feet);
+      if (this.probeGround(feet) == null) return null;
+      if (this.intersectsWalls(feet)) return null;
+      return feet;
+    };
+
+    const direct = tryOne(x, z);
+    if (direct) return direct;
+
+    // Pit / gap under the pick — walk outward until a real landing.
+    for (let ring = 1; ring <= 14; ring += 1) {
+      const step = ring * 2.5;
+      const samples = [
+        [x + step, z],
+        [x - step, z],
+        [x, z + step],
+        [x, z - step],
+        [x + step, z + step],
+        [x - step, z + step],
+        [x + step, z - step],
+        [x - step, z - step],
+      ];
+      for (const [px, pz] of samples) {
+        const feet = tryOne(px, pz);
+        if (feet) return feet;
+      }
     }
 
-    this.snapToGroundSkin(feet);
-    this.clampToBounds(feet);
-    return feet;
+    // Absolute last resort: known map drop candidates near box min corner.
+    return (
+      tryOne(box.min.x + SPAWN_INSET_X, box.min.z + SPAWN_INSET_Z)
+      || new THREE.Vector3(x, box.max.y, z)
+    );
   }
 
   /**

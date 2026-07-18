@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { PlayerController } from './controls.js';
+import { PlayerController } from './controls.js?v=2';
 import { InteractableManager } from './interactables.js';
-import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js?v=3';
+import { setupMapCollision, dropSpawnFromCorner, CollisionWorld, PLAYER_HEIGHT } from './collision.js?v=4';
 import { WeatherSystem } from './weather.js';
 import { Minimap, collectMapMeshes } from './minimap.js?v=10';
 import { WeaponSystem } from './weapons.js?v=29';
@@ -480,19 +480,23 @@ function initWeapons() {
   if (ammoHud) ammoHud.textContent = weapons.getAmmoDisplay();
 }
 
+/** Drop-in height (meters) above floor before settle — same gravity path for every seat. */
+const SPAWN_DROP_METERS = 12;
+
 function applySpawn(spawnIndex) {
   if (!player || !collisionWorld) return;
-  if (!spawnPoints.length) {
-    player.setPosition(baseSpawn.x, baseSpawn.y, baseSpawn.z);
-    return;
+  let x = baseSpawn.x;
+  let z = baseSpawn.z;
+  if (spawnPoints.length) {
+    const i = ((spawnIndex % spawnPoints.length) + spawnPoints.length) % spawnPoints.length;
+    x = spawnPoints[i].x;
+    z = spawnPoints[i].z;
   }
-  const i = ((spawnIndex % spawnPoints.length) + spawnPoints.length) % spawnPoints.length;
-  const p = spawnPoints[i];
-  // Never fall back to an unvalidated point — prefer another open slot / base.
-  const feet = collisionWorld.tryValidFeet(p.x, p.z, mapBoundsBox)
-    || collisionWorld.tryValidFeet(baseSpawn.x, baseSpawn.z, mapBoundsBox)
-    || spawnPoints[0];
-  player.setPosition(feet.x, feet.y, feet.z);
+  // Everyone: start SPAWN_DROP_METERS above ground at this XZ, then land with drop sim.
+  const feet = collisionWorld.dropFromAbove(x, z, mapBoundsBox, SPAWN_DROP_METERS);
+  player.position.set(feet.x, feet.y, feet.z);
+  player.velocityY = 0;
+  player.onGround = true;
 }
 
 function enterGameplay(info) {

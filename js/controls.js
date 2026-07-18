@@ -135,38 +135,42 @@ export class PlayerController {
   }
 
   update(delta) {
-    if (!this.enabled || !this.pointerLocked) return;
+    if (!this.enabled) return;
 
-    this.timeSinceMouseMove += delta;
+    // Gravity always runs while enabled so a mid-air spawn still lands before click-lock.
+    // Movement / jump only with pointer lock.
+    if (this.pointerLocked) {
+      this.timeSinceMouseMove += delta;
 
-    const sprinting = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
-    const speed = MOVE_SPEED * (sprinting ? SPRINT_MULT : 1);
+      const sprinting = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+      const speed = MOVE_SPEED * (sprinting ? SPRINT_MULT : 1);
 
-    this.direction.set(-this.moveInput.right, 0, this.moveInput.forward);
-    if (this.direction.lengthSq() > 0) {
-      this.direction.normalize();
-    }
-
-    const forward = this.getCameraForward(new THREE.Vector3());
-    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward).normalize();
-    const wish = new THREE.Vector3()
-      .addScaledVector(forward, this.direction.z)
-      .addScaledVector(right, this.direction.x);
-
-    if (wish.lengthSq() > 0) {
-      wish.normalize().multiplyScalar(speed * delta);
-      this.collisionWorld.moveAndSlide(this.position, wish);
-
-      if (this.isMouseIdle()) {
-        this.characterYaw = Math.atan2(wish.x, wish.z);
+      this.direction.set(-this.moveInput.right, 0, this.moveInput.forward);
+      if (this.direction.lengthSq() > 0) {
+        this.direction.normalize();
       }
-    } else if (!this.isMouseIdle()) {
-      this.characterYaw = this.cameraYaw;
-    }
 
-    if (this.onGround && this.keys.has('Space')) {
-      this.velocityY = JUMP_VELOCITY;
-      this.onGround = false;
+      const forward = this.getCameraForward(new THREE.Vector3());
+      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward).normalize();
+      const wish = new THREE.Vector3()
+        .addScaledVector(forward, this.direction.z)
+        .addScaledVector(right, this.direction.x);
+
+      if (wish.lengthSq() > 0) {
+        wish.normalize().multiplyScalar(speed * delta);
+        this.collisionWorld.moveAndSlide(this.position, wish);
+
+        if (this.isMouseIdle()) {
+          this.characterYaw = Math.atan2(wish.x, wish.z);
+        }
+      } else if (!this.isMouseIdle()) {
+        this.characterYaw = this.cameraYaw;
+      }
+
+      if (this.onGround && this.keys.has('Space')) {
+        this.velocityY = JUMP_VELOCITY;
+        this.onGround = false;
+      }
     }
 
     this.velocityY -= GRAVITY * delta;
