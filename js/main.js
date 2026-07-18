@@ -482,6 +482,8 @@ function initWeapons() {
 
 /** Drop-in height (meters) above floor before settle — same gravity path for every seat. */
 const SPAWN_DROP_METERS = 12;
+/** Map mesh has gaps — if feet go this far under the AABB floor, hard-respawn. */
+const VOID_BELOW_MAP_M = 50;
 
 function applySpawn(spawnIndex) {
   if (!player || !collisionWorld) return;
@@ -497,6 +499,15 @@ function applySpawn(spawnIndex) {
   player.position.set(feet.x, feet.y, feet.z);
   player.velocityY = 0;
   player.onGround = true;
+}
+
+/** Kill-plane: GLB holes dump players into the void — put them back on a spawn. */
+function rescueIfFallenThroughMap() {
+  if (!player || !mapLoaded || !gameplayActive || net.spectating) return;
+  const voidY = mapBoundsBox.min.y - VOID_BELOW_MAP_M;
+  if (player.position.y >= voidY) return;
+  applySpawn(net._spawnIndex || 0);
+  setStatus('Fell through map — respawned');
 }
 
 function enterGameplay(info) {
@@ -938,6 +949,7 @@ function animate() {
     }
   } else if (player && mapLoaded && gameplayActive) {
     player.update(delta);
+    rescueIfFallenThroughMap();
 
     const feet = player.getFeetPosition(new THREE.Vector3());
     character.position.copy(feet);
