@@ -218,14 +218,20 @@ async def handle_match_ws(
     finally:
         await room.remove(username, ws, spectate=spectate)
         if not spectate:
-            board.leave(username)
-            await room.broadcast(
-                {
-                    "type": "player_left",
-                    "username": username,
-                    "players": board.players_in(lobby_id),
-                }
-            )
+            # HF WS often blips right at match_start. Instant leave was wiping BOTH
+            # seats and bootstrapping players back to an empty lobby.
+            await asyncio.sleep(3.0)
+            still = board.by_user.get(username)
+            reconnected = username in room.clients
+            if still and still[0] == lobby_id and not reconnected:
+                board.leave(username)
+                await room.broadcast(
+                    {
+                        "type": "player_left",
+                        "username": username,
+                        "players": board.players_in(lobby_id),
+                    }
+                )
         async with rooms_lock:
             if room.lobby_id == lobby_id and not room.clients and not room.spectators:
                 rooms.pop(f"{mode}:{lobby_id}", None)
